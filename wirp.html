@@ -44,7 +44,7 @@
         .tab-src-dot { width:6px; height:6px; border-radius:50%; flex-shrink:0; }
 
         /* ── Table rows ── */
-        .data-row { display:grid; grid-template-columns:2fr 1.15fr 1.15fr; align-items:center; padding:9px 22px; border-bottom:1px solid var(--border-sub); transition:background 0.1s; }
+        .data-row { display:grid; grid-template-columns:2fr 1.15fr 1.15fr 1.7fr; align-items:center; padding:9px 22px; border-bottom:1px solid var(--border-sub); transition:background 0.1s; }
         .data-row:hover { background:var(--row-hover) !important; }
         .data-row:last-child { border-bottom:none; }
 
@@ -74,7 +74,7 @@
 
         #chartArea { background:var(--panel); border-left:1px solid var(--border); border-right:1px solid var(--border); border-bottom:1px solid var(--border-sub); padding:14px 22px 8px; }
 
-        .totals-row { display:grid; grid-template-columns:2fr 1.15fr 1.15fr; align-items:center; padding:9px 22px; background:var(--panel-hi); border-top:1px solid var(--border); }
+        .totals-row { display:grid; grid-template-columns:2fr 1.15fr 1.15fr 1.7fr; align-items:center; padding:9px 22px; background:var(--panel-hi); border-top:1px solid var(--border); }
 
         .mkt-card { flex:1; min-width:170px; cursor:pointer; background:var(--panel); border:1px solid var(--border-sub); border-radius:5px; padding:10px 13px; transition:border-color .15s,background .15s,box-shadow .15s; box-shadow:0 1px 3px rgba(0,0,0,.05); }
         .mkt-card:hover { background:var(--panel-alt); border-color:var(--border); box-shadow:0 2px 6px rgba(0,0,0,.08); }
@@ -95,8 +95,8 @@
         @media (max-width:640px) {
             #container { padding:8px; }
             #utcClock { display:none; }
-            .data-row { grid-template-columns:2fr 1fr 1fr; padding:8px 12px; }
-            .totals-row { grid-template-columns:2fr 1fr 1fr; padding:8px 12px; }
+            .data-row { grid-template-columns:2fr 1fr 1fr 1.5fr; padding:8px 12px; }
+            .totals-row { grid-template-columns:2fr 1fr 1fr 1.5fr; padding:8px 12px; }
             #summaryStrip { padding:10px 12px; }
             .strip-item { padding:4px 10px 4px 0; }
             #chartArea { padding:12px 12px 8px; }
@@ -174,6 +174,7 @@
         <div style="font-size:0.58rem;color:var(--text-dim);letter-spacing:0.1em;text-transform:uppercase;">#&nbsp;&nbsp;Meeting Date</div>
         <div style="font-size:0.58rem;color:var(--text-dim);letter-spacing:0.1em;text-transform:uppercase;text-align:right;">Implied Rate</div>
         <div style="font-size:0.58rem;color:var(--text-dim);letter-spacing:0.1em;text-transform:uppercase;text-align:right;">±bps</div>
+        <div style="font-size:0.58rem;color:var(--text-dim);letter-spacing:0.1em;text-transform:uppercase;padding-left:10px;">Probability</div>
     </div>
 </div>
 
@@ -299,25 +300,37 @@ function tickCountdown() {
 // ── Data ──
 function generateData(code) {
     const m = markets[code];
-    return m.meetings.map((meeting, i) => {
+    const rows = m.meetings.map((meeting, i) => {
         const hasRate = m.impliedRates && i < m.impliedRates.length && m.impliedRates[i] != null;
-        if (!hasRate) {
-            // No real market data available — return null row (not rendered)
-            return { meeting, impliedRate: null, impliedChangeBps: null,
-                     hikeProb: null, cutProb: null, isInterp: false, noData: true };
-        }
+        if (!hasRate) return { meeting, impliedRate: null, impliedChangeBps: null, isInterp: false, noData: true };
         const implied = m.impliedRates[i];
-        const change  = implied - m.rate;
-        const bps     = change * 100;
+        const bps     = (implied - m.rate) * 100;
         return {
             meeting,
             impliedRate:      implied,
             impliedChangeBps: bps,
-            hikeProb:         parseFloat((change > 0 ? Math.min((change / 0.25) * 100, 100) : 0).toFixed(1)),
-            cutProb:          parseFloat((change < 0 ? Math.min((Math.abs(change) / 0.25) * 100, 100) : 0).toFixed(1)),
             isInterp:         !!(m.impliedRatesInterp && m.impliedRatesInterp[i]),
         };
     }).filter(r => !r.noData);
+
+    // Per-meeting probability (CME FedWatch methodology applied to all markets)
+    // outcomeA = lower 25bp bracket, outcomeB = upper 25bp bracket
+    rows.forEach((row, i) => {
+        const prevRate = i === 0 ? m.rate : rows[i - 1].impliedRate;
+        const dBps = (row.impliedRate - prevRate) * 100;
+        const STEP = 25;
+        const lower = Math.floor(dBps / STEP) * STEP;
+        const upper = lower + STEP;
+        const pB = Math.max(0, Math.min(1, (dBps - lower) / STEP));
+        const pA = 1 - pB;
+        row.meetingChangeBps = dBps;
+        row.outcomeA = lower;           // bps e.g. -25, 0, +25
+        row.outcomeB = upper;           // bps
+        row.probA    = Math.round(pA * 1000) / 10;  // % for lower outcome
+        row.probB    = Math.round(pB * 1000) / 10;  // % for upper outcome
+    });
+
+    return rows;
 }
 
 // ── Summary strip ──
@@ -332,10 +345,27 @@ function renderSummary(code) {
     const srcColor = isLive ? 'var(--green)' : 'var(--amber)';
     const srcLabel = isLive ? 'Live' : 'Static';
 
+    // Year-end pricing — last meeting in current calendar year
+    const curYear = new Date().getFullYear();
+    const yeRows = data.filter(r => { try { return parseMeetingDate(r.meeting).getFullYear() === curYear; } catch { return false; } });
+    let yearEndHtml = '';
+    if (yeRows.length) {
+        const yeRow = yeRows[yeRows.length - 1];
+        const yeBps = (yeRow.impliedRate - m.rate) * 100;
+        const yeColor = yeBps < 0 ? 'var(--red)' : yeBps > 0 ? 'var(--green)' : 'var(--text-mid)';
+        const nMoves = yeBps / 25;
+        const movesLabel = Math.abs(nMoves) < 0.05 ? 'on hold' :
+            nMoves < 0 ? `${Math.abs(nMoves).toFixed(1)} cut${Math.abs(nMoves) !== 1 ? 's' : ''} priced`
+                       : `${nMoves.toFixed(1)} hike${nMoves !== 1 ? 's' : ''} priced`;
+        const lastDecMtg = yeRows[yeRows.length - 1].meeting;
+        yearEndHtml = `<div class="strip-item"><div class="strip-label">Year-end (${lastDecMtg.split(' ')[1]})</div><div class="strip-value" style="color:${yeColor};">${yeBps >= 0 ? '+' : ''}${+yeBps.toFixed(1)}<span style="font-size:.68rem;"> bps</span></div><div style="font-size:.6rem;color:var(--text-dim);margin-top:2px;">${movesLabel}</div></div>`;
+    }
+
     document.getElementById('summaryStrip').innerHTML = `
         <div class="strip-item"><div class="strip-label">Central Bank</div><div class="strip-value" style="font-size:.76rem;">${m.name}</div></div>
         <div class="strip-item"><div class="strip-label">Current Rate</div><div class="strip-value">${m.rate.toFixed(3)}<span style="font-size:.68rem;color:var(--text-mid);">%</span></div></div>
         <div class="strip-item"><div class="strip-label">Priced End Change</div><div class="strip-value" style="color:${chgColor};">${totalBps >= 0 ? '+' : ''}${+totalBps.toFixed(4)}<span style="font-size:.68rem;"> bps</span></div></div>
+        ${yearEndHtml}
         <div class="strip-item"><div class="strip-label">Implied Rate (end)</div><div class="strip-value">${last.impliedRate.toFixed(4)}<span style="font-size:.68rem;color:var(--text-mid);">%</span></div></div>
         <div class="strip-item" style="border-right:none;margin-right:0;"><div class="strip-label">Data Source</div><div style="display:flex;align-items:center;gap:5px;margin-top:1px;"><span style="width:7px;height:7px;border-radius:50%;background:${srcColor};display:inline-block;flex-shrink:0;"></span><span style="font-size:.65rem;font-weight:600;color:${srcColor};">${srcLabel}</span><span style="font-size:.58rem;color:var(--text-mid);max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${srcText}">${srcText}</span></div></div>`;
 
@@ -416,6 +446,15 @@ function renderChart(code) {
 }
 
 // ── Table ──
+function _outcomeLabel(bps) {
+    if (Math.abs(bps) < 0.5) return 'Hold';
+    return (bps > 0 ? '+' : '') + bps.toFixed(0) + 'bp';
+}
+function _outcomeColor(bps) {
+    if (Math.abs(bps) < 0.5) return 'var(--text-dim)';
+    return bps > 0 ? 'var(--green)' : 'var(--red)';
+}
+
 function renderTable(code, flash = false) {
     const m = markets[code], data = cachedData[code];
     let html = '';
@@ -425,6 +464,30 @@ function renderTable(code, flash = false) {
         let arrow = '━', ac = 'var(--text-dim)';
         if (row.impliedChangeBps >= 1)  { arrow = '▲'; ac = 'var(--green)'; }
         if (row.impliedChangeBps <= -1) { arrow = '▼'; ac = 'var(--red)'; }
+
+        // Probability bar (CME FedWatch style per-meeting probability)
+        let probHtml = '<div></div>';
+        if (row.probA !== undefined) {
+            const pA = row.probA, pB = row.probB;
+            const oA = row.outcomeA, oB = row.outcomeB;
+            const cA = _outcomeColor(oA), cB = _outcomeColor(oB);
+            const lA = _outcomeLabel(oA), lB = _outcomeLabel(oB);
+            if (pA >= 99.9) {
+                probHtml = `<div style="padding-left:10px;"><span style="font-size:.72rem;font-weight:600;color:${cA};">${lA}</span><span style="font-size:.6rem;color:var(--text-dim);margin-left:4px;">100%</span></div>`;
+            } else {
+                probHtml = `<div style="padding-left:10px;">
+                    <div style="display:flex;justify-content:space-between;font-size:.6rem;margin-bottom:3px;line-height:1.2;">
+                        <span style="color:${cA};font-weight:600;">${lA}&nbsp;<span style="font-weight:400;opacity:.85;">${pA.toFixed(0)}%</span></span>
+                        <span style="color:${cB};font-weight:600;"><span style="font-weight:400;opacity:.85;">${pB.toFixed(0)}%</span>&nbsp;${lB}</span>
+                    </div>
+                    <div style="height:6px;border-radius:3px;overflow:hidden;background:var(--border-sub);display:flex;gap:1px;">
+                        <div style="width:${pA}%;background:${cA};opacity:0.75;border-radius:3px 0 0 3px;"></div>
+                        <div style="width:${pB}%;background:${cB};opacity:0.75;border-radius:0 3px 3px 0;"></div>
+                    </div>
+                </div>`;
+            }
+        }
+
         html += `<div class="data-row${flash ? ' flash' : ''}" style="background:${bg};">
             <div style="display:flex;align-items:center;gap:7px;">
                 <span style="font-size:.61rem;color:var(--text-dim);min-width:14px;text-align:right;">${i+1}</span>
@@ -434,6 +497,7 @@ function renderTable(code, flash = false) {
             </div>
             <div style="text-align:right;">${row.isInterp ? `<span style="font-size:.65rem;color:var(--text-dim);margin-right:1px;" title="Interpolated — no direct futures contract for this meeting">~</span>` : ''}<span style="font-size:.85rem;font-weight:600;color:var(--text);">${row.impliedRate.toFixed(4)}</span><span style="font-size:.61rem;color:var(--text-mid);">%</span></div>
             <div style="text-align:right;"><span style="font-size:.85rem;font-weight:700;color:${chgColor};">${row.impliedChangeBps >= 0 ? '+' : ''}${+row.impliedChangeBps.toFixed(4)}</span><span style="font-size:.58rem;color:var(--text-dim);"> bps</span></div>
+            ${probHtml}
         </div>`;
     });
     document.getElementById('tableBody').innerHTML = html;
@@ -522,14 +586,52 @@ function renderGlobalChart() {
 
 // ── Cross-market global overview ──
 function renderCrossMarket() {
+    // ── Up Next: find market with soonest upcoming meeting ──────────────────
+    const todayMs = Date.now();
+    let upCode = null, upDays = Infinity, upRow = null;
+    ALL_CODES.forEach(c => {
+        const d = cachedData[c];
+        if (!d?.length) return;
+        const mtgMs = parseMeetingDate(d[0].meeting).getTime();
+        const days  = Math.ceil((mtgMs - todayMs) / 86400000);
+        if (days >= 0 && days < upDays) { upDays = days; upCode = c; upRow = d[0]; }
+    });
+
+    let upNextHtml = '';
+    if (upCode && upRow) {
+        const um = markets[upCode];
+        const uc = MARKET_COLORS[upCode];
+        const daysStr = upDays === 0 ? 'Today' : upDays === 1 ? 'Tomorrow' : `in ${upDays}d`;
+        const pA = upRow.probA, pB = upRow.probB;
+        const lA = _outcomeLabel(upRow.outcomeA), lB = _outcomeLabel(upRow.outcomeB);
+        const cA = _outcomeColor(upRow.outcomeA), cB = _outcomeColor(upRow.outcomeB);
+        const probStr = pA >= 99.9 ? `<span style="color:${cA};font-weight:600;">${lA} 100%</span>`
+            : `<span style="color:${cA};font-weight:600;">${lA} ${pA.toFixed(0)}%</span><span style="color:var(--text-dim);margin:0 4px;">/</span><span style="color:${cB};font-weight:600;">${lB} ${pB.toFixed(0)}%</span>`;
+        upNextHtml = `<div style="display:flex;align-items:center;gap:14px;background:var(--panel-hi);border:1px solid var(--border-sub);border-radius:5px;padding:9px 14px;margin-bottom:12px;flex-wrap:wrap;row-gap:6px;">
+            <div style="display:flex;align-items:center;gap:7px;flex-shrink:0;">
+                <span style="font-size:.55rem;color:var(--text-dim);letter-spacing:.1em;text-transform:uppercase;white-space:nowrap;">Up Next</span>
+                <span style="width:8px;height:8px;border-radius:50%;background:${uc};display:inline-block;flex-shrink:0;"></span>
+                <span style="font-size:.78rem;font-weight:700;color:var(--text);">${upCode} — ${um.name}</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;row-gap:4px;">
+                <div><span style="font-size:.58rem;color:var(--text-dim);text-transform:uppercase;letter-spacing:.08em;">Meeting</span><br><span style="font-size:.75rem;color:var(--text);font-weight:600;">${upRow.meeting}</span></div>
+                <div><span style="font-size:.58rem;color:var(--text-dim);text-transform:uppercase;letter-spacing:.08em;">Countdown</span><br><span style="font-size:.75rem;color:var(--amber);font-weight:700;">${daysStr}</span></div>
+                <div><span style="font-size:.58rem;color:var(--text-dim);text-transform:uppercase;letter-spacing:.08em;">Priced</span><br><div style="font-size:.72rem;margin-top:1px;">${probStr}</div></div>
+                <div><span style="font-size:.58rem;color:var(--text-dim);text-transform:uppercase;letter-spacing:.08em;">Current Rate</span><br><span style="font-size:.75rem;color:var(--amber);font-weight:600;">${um.rate.toFixed(2)}%</span></div>
+            </div>
+            <button onclick="switchTab('${upCode}')" style="margin-left:auto;font-size:.58rem;padding:4px 10px;border:1px solid var(--border);border-radius:4px;background:var(--panel);color:var(--text-mid);cursor:pointer;white-space:nowrap;flex-shrink:0;">Open ${upCode} →</button>
+        </div>`;
+    }
+
     let html = `<div style="background:var(--panel);border:1px solid var(--border);border-top:none;padding:14px 22px 16px;">
+        ${upNextHtml}
         <div style="font-size:.58rem;color:var(--text-dim);letter-spacing:.1em;text-transform:uppercase;margin-bottom:10px;">
             Global Overview &nbsp;·&nbsp; Implied Rate Change vs Current (bps) &nbsp;·&nbsp; Click a market to highlight
         </div>
         <div id="globalChartArea" style="margin-bottom:14px;"></div>
         <div style="display:flex;gap:9px;flex-wrap:wrap;">`;
 
-    ['US','EU','UK','CA','AU'].forEach(code => {
+    ALL_CODES.forEach(code => {
         const m = markets[code], data = cachedData[code];
         if (!data || !data.length) return;
         const last     = data[data.length - 1];
@@ -537,6 +639,19 @@ function renderCrossMarket() {
         const chgColor = totalBps < 0 ? 'var(--red)' : totalBps > 0 ? 'var(--green)' : 'var(--text-mid)';
         const isHl     = code === globalHighlight;
         const dotColor = MARKET_COLORS[code];
+        const nextDays = daysUntilMeeting(code);
+        const nextStr  = nextDays === null ? '' : nextDays === 0 ? 'Today' : nextDays === 1 ? 'Tomorrow' : `Next in ${nextDays}d`;
+
+        // Year-end pricing for this market
+        const curYear = new Date().getFullYear();
+        const yeRow = data.filter(r => { try { return parseMeetingDate(r.meeting).getFullYear() === curYear; } catch { return false; } }).pop();
+        const yeBps = yeRow ? (yeRow.impliedRate - m.rate) * 100 : null;
+        const yeColor = yeBps === null ? 'var(--text-dim)' : yeBps < 0 ? 'var(--red)' : yeBps > 0 ? 'var(--green)' : 'var(--text-dim)';
+        const yeHtml = yeBps !== null ? `<div style="margin-top:5px;border-top:1px solid var(--border-sub);padding-top:5px;">
+            <span style="font-size:.5rem;color:var(--text-dim);text-transform:uppercase;letter-spacing:.08em;">Year-end</span>
+            <span style="font-size:.68rem;font-weight:600;color:${yeColor};margin-left:4px;">${yeBps >= 0 ? '+' : ''}${+yeBps.toFixed(0)} bps</span>
+            <span style="font-size:.55rem;color:var(--text-dim);margin-left:3px;">(${(yeBps/25).toFixed(1)} moves)</span>
+        </div>` : '';
 
         html += `<div class="mkt-card ${isHl ? 'active-card' : ''}" onclick="highlightGlobalMarket('${code}')" style="${isHl ? `border-color:${dotColor};box-shadow:0 0 0 1px ${dotColor};` : ''}">
             <div style="margin-bottom:6px;display:flex;align-items:center;gap:6px;">
@@ -553,10 +668,15 @@ function renderCrossMarket() {
                 </div>
                 <div>
                     <div style="font-size:.53rem;color:var(--text-dim);letter-spacing:.09em;text-transform:uppercase;margin-bottom:1px;">End Change</div>
-                    <div style="font-size:.9rem;font-weight:700;color:${chgColor};">${totalBps >= 0 ? '+' : ''}${+totalBps.toFixed(4)}<span style="font-size:.58rem;font-weight:400;"> bps</span></div>
+                    <div style="font-size:.9rem;font-weight:700;color:${chgColor};">${totalBps >= 0 ? '+' : ''}${+totalBps.toFixed(1)}<span style="font-size:.58rem;font-weight:400;"> bps</span></div>
                 </div>
+                ${nextStr ? `<div style="margin-left:auto;text-align:right;">
+                    <div style="font-size:.53rem;color:var(--text-dim);letter-spacing:.09em;text-transform:uppercase;margin-bottom:1px;">Next Mtg</div>
+                    <div style="font-size:.68rem;font-weight:600;color:var(--amber);">${nextStr}</div>
+                </div>` : ''}
             </div>
-            <div style="margin-top:6px;"><button onclick="event.stopPropagation();switchTab('${code}')" style="font-size:.55rem;padding:2px 7px;border:1px solid var(--border);border-radius:3px;background:var(--panel-alt);color:var(--text-mid);cursor:pointer;letter-spacing:.04em;">Details →</button></div>
+            ${yeHtml}
+            <div style="margin-top:7px;"><button onclick="event.stopPropagation();switchTab('${code}')" style="font-size:.55rem;padding:2px 7px;border:1px solid var(--border);border-radius:3px;background:var(--panel-alt);color:var(--text-mid);cursor:pointer;letter-spacing:.04em;">Details →</button></div>
         </div>`;
     });
 
@@ -605,6 +725,62 @@ function selectMeeting(idx) {
 // Renders historical implied rates from markets[code].history snapshots.
 // Each snapshot: { date: "DD Mon YYYY", impliedRates: [r0, r1, ...] }
 // Populated by update_data.py appending daily snapshots (up to 3 years).
+
+// Past rate decisions — used as event markers on the history chart
+const PAST_DECISIONS = {
+    US:[
+        {d:'07 May 2025',c:0,l:'FOMC Hold'},{d:'19 Mar 2025',c:0,l:'FOMC Hold'},
+        {d:'29 Jan 2025',c:0,l:'FOMC Hold'},{d:'18 Dec 2024',c:-25,l:'FOMC -25bp'},
+        {d:'07 Nov 2024',c:-25,l:'FOMC -25bp'},{d:'18 Sep 2024',c:-50,l:'FOMC -50bp'},
+        {d:'31 Jul 2024',c:0,l:'FOMC Hold'},{d:'12 Jun 2024',c:0,l:'FOMC Hold'},
+        {d:'01 May 2024',c:0,l:'FOMC Hold'},{d:'20 Mar 2024',c:0,l:'FOMC Hold'},
+        {d:'31 Jan 2024',c:0,l:'FOMC Hold'},{d:'13 Dec 2023',c:0,l:'FOMC Hold'},
+        {d:'01 Nov 2023',c:0,l:'FOMC Hold'},{d:'20 Sep 2023',c:0,l:'FOMC Hold'},
+        {d:'26 Jul 2023',c:25,l:'FOMC +25bp'},{d:'14 Jun 2023',c:25,l:'FOMC +25bp'},
+        {d:'03 May 2023',c:25,l:'FOMC +25bp'},
+    ],
+    EU:[
+        {d:'06 Mar 2025',c:-25,l:'ECB -25bp'},{d:'30 Jan 2025',c:-25,l:'ECB -25bp'},
+        {d:'12 Dec 2024',c:-25,l:'ECB -25bp'},{d:'17 Oct 2024',c:-25,l:'ECB -25bp'},
+        {d:'12 Sep 2024',c:-25,l:'ECB -25bp'},{d:'06 Jun 2024',c:-25,l:'ECB -25bp'},
+        {d:'11 Apr 2024',c:0,l:'ECB Hold'},{d:'07 Mar 2024',c:0,l:'ECB Hold'},
+        {d:'25 Jan 2024',c:0,l:'ECB Hold'},{d:'14 Dec 2023',c:0,l:'ECB Hold'},
+        {d:'26 Oct 2023',c:0,l:'ECB Hold'},{d:'14 Sep 2023',c:25,l:'ECB +25bp'},
+        {d:'27 Jul 2023',c:25,l:'ECB +25bp'},{d:'15 Jun 2023',c:25,l:'ECB +25bp'},
+        {d:'04 May 2023',c:25,l:'ECB +25bp'},
+    ],
+    UK:[
+        {d:'20 Mar 2025',c:0,l:'MPC Hold'},{d:'06 Feb 2025',c:-25,l:'MPC -25bp'},
+        {d:'19 Dec 2024',c:0,l:'MPC Hold'},{d:'07 Nov 2024',c:-25,l:'MPC -25bp'},
+        {d:'19 Sep 2024',c:0,l:'MPC Hold'},{d:'01 Aug 2024',c:-25,l:'MPC -25bp'},
+        {d:'20 Jun 2024',c:0,l:'MPC Hold'},{d:'09 May 2024',c:0,l:'MPC Hold'},
+        {d:'21 Mar 2024',c:0,l:'MPC Hold'},{d:'01 Feb 2024',c:0,l:'MPC Hold'},
+        {d:'14 Dec 2023',c:0,l:'MPC Hold'},{d:'02 Nov 2023',c:0,l:'MPC Hold'},
+        {d:'21 Sep 2023',c:25,l:'MPC +25bp'},{d:'03 Aug 2023',c:25,l:'MPC +25bp'},
+    ],
+    CA:[
+        {d:'16 Apr 2025',c:0,l:'BOC Hold'},{d:'12 Mar 2025',c:-25,l:'BOC -25bp'},
+        {d:'29 Jan 2025',c:-25,l:'BOC -25bp'},{d:'11 Dec 2024',c:-50,l:'BOC -50bp'},
+        {d:'23 Oct 2024',c:-50,l:'BOC -50bp'},{d:'04 Sep 2024',c:-25,l:'BOC -25bp'},
+        {d:'24 Jul 2024',c:-25,l:'BOC -25bp'},{d:'05 Jun 2024',c:-25,l:'BOC -25bp'},
+        {d:'10 Apr 2024',c:0,l:'BOC Hold'},{d:'06 Mar 2024',c:0,l:'BOC Hold'},
+        {d:'24 Jan 2024',c:0,l:'BOC Hold'},{d:'06 Dec 2023',c:0,l:'BOC Hold'},
+        {d:'25 Oct 2023',c:0,l:'BOC Hold'},{d:'06 Sep 2023',c:0,l:'BOC Hold'},
+        {d:'12 Jul 2023',c:25,l:'BOC +25bp'},{d:'07 Jun 2023',c:25,l:'BOC +25bp'},
+    ],
+    AU:[
+        {d:'18 Mar 2025',c:-25,l:'RBA -25bp'},{d:'18 Feb 2025',c:-25,l:'RBA -25bp'},
+        {d:'10 Dec 2024',c:0,l:'RBA Hold'},{d:'05 Nov 2024',c:0,l:'RBA Hold'},
+        {d:'24 Sep 2024',c:0,l:'RBA Hold'},{d:'06 Aug 2024',c:0,l:'RBA Hold'},
+        {d:'18 Jun 2024',c:0,l:'RBA Hold'},{d:'07 May 2024',c:0,l:'RBA Hold'},
+        {d:'19 Mar 2024',c:0,l:'RBA Hold'},{d:'06 Feb 2024',c:0,l:'RBA Hold'},
+        {d:'05 Dec 2023',c:0,l:'RBA Hold'},{d:'07 Nov 2023',c:25,l:'RBA +25bp'},
+        {d:'03 Oct 2023',c:0,l:'RBA Hold'},{d:'05 Sep 2023',c:0,l:'RBA Hold'},
+        {d:'01 Aug 2023',c:0,l:'RBA Hold'},{d:'04 Jul 2023',c:25,l:'RBA +25bp'},
+        {d:'06 Jun 2023',c:25,l:'RBA +25bp'},
+    ],
+};
+
 function renderMeetingHistoryChart(code, meetingIdx) {
     const m   = markets[code];
     const fwd = cachedData[code];
@@ -649,6 +825,12 @@ function renderMeetingHistoryChart(code, meetingIdx) {
     const minR  = Math.floor(Math.round(_rMin * _S) / _S / _step) * _step;
     const maxR  = Math.ceil(Math.round(_rMax * _S) / _S / _step) * _step;
 
+    // Build date→index lookup for event markers
+    const dateToIdx = {};
+    hist.forEach((d, i) => { dateToIdx[d.label] = i; });
+
+    // x-scale: time-proportional using sort key for correct ordering
+    const histKeys = hist.map(d => d.label);
     const xS = i => PAD.l + (n > 1 ? (i / (n-1)) * cw : cw/2);
     const yS = v => PAD.t + ch - ((v - minR) / Math.max(maxR - minR, 0.01)) * ch;
 
@@ -656,10 +838,40 @@ function renderMeetingHistoryChart(code, meetingIdx) {
     for (let v = minR; v <= maxR + _step * 0.001; v = Math.round((v + _step) * _S) / _S) {
         const y = yS(v);
         g += `<line x1="${PAD.l}" y1="${y}" x2="${PAD.l+cw}" y2="${y}" stroke="var(--border-sub)" stroke-width="1"/>`;
-        g += `<text x="${PAD.l-6}" y="${y+4}" text-anchor="end" font-size="9" fill="var(--text-dim)" font-family="JetBrains Mono,monospace">${v.toFixed(2)}%</text>`;
+        g += `<text x="${PAD.l-6}" y="${y+4}" text-anchor="end" font-size="10" fill="var(--text-dim)" font-family="system-ui,sans-serif">${v.toFixed(2)}%</text>`;
     }
     const spotY = yS(m.rate);
     g += `<line x1="${PAD.l}" y1="${spotY}" x2="${PAD.l+cw}" y2="${spotY}" stroke="var(--text-dim)" stroke-width="1" stroke-dasharray="4,3"/>`;
+    g += `<text x="${PAD.l+cw+3}" y="${spotY+4}" font-size="9" fill="var(--text-dim)" font-family="system-ui,sans-serif">Spot</text>`;
+
+    // ── Event markers (past central bank decisions) ──
+    let evMarkers = '';
+    const evDecisions = PAST_DECISIONS[code] || [];
+    evDecisions.forEach(ev => {
+        // Find nearest hist index to this event date
+        const evKey = ev.d;
+        // Find the closest hist index by date comparison
+        let bestIdx = -1, bestDist = Infinity;
+        hist.forEach((d, i) => {
+            // Compare sort keys (YYYY-MM-DD style)
+            const k1 = d.label.split(' ');
+            const k2 = evKey.split(' ');
+            const MONTHS = {Jan:1,Feb:2,Mar:3,Apr:4,May:5,Jun:6,Jul:7,Aug:8,Sep:9,Oct:10,Nov:11,Dec:12};
+            const t1 = new Date(+k1[2], (MONTHS[k1[1]]||1)-1, +k1[0]).getTime();
+            const t2 = new Date(+k2[2], (MONTHS[k2[1]]||1)-1, +k2[0]).getTime();
+            const dist = Math.abs(t1 - t2);
+            if (dist < bestDist && dist < 3*86400000) { bestDist = dist; bestIdx = i; }
+        });
+        if (bestIdx < 0) return;
+        const ex = xS(bestIdx);
+        const ey1 = PAD.t, ey2 = H - PAD.b;
+        const evColor = ev.c < 0 ? '#dc2626' : ev.c > 0 ? '#15803d' : '#94a3b8';
+        evMarkers += `<g class="ev-marker">
+            <line x1="${ex}" y1="${ey1}" x2="${ex}" y2="${ey2}" stroke="${evColor}" stroke-width="1" stroke-dasharray="2,3" opacity="0.55"/>
+            <circle cx="${ex}" cy="${ey2}" r="3.5" fill="${evColor}" opacity="0.8" stroke="var(--panel)" stroke-width="1"/>
+            <title>${ev.l} (${ev.d})</title>
+        </g>`;
+    });
 
     let path = `M ${xS(0)} ${yS(hist[0].rate)}`;
     let area = `M ${PAD.l} ${H-PAD.b} L ${xS(0)} ${yS(hist[0].rate)}`;
@@ -671,7 +883,7 @@ function renderMeetingHistoryChart(code, meetingIdx) {
     let dots = '';
     hist.forEach((d, i) => {
         const isNow = i === n-1;
-        dots += `<circle cx="${xS(i)}" cy="${yS(d.rate)}" r="${isNow ? 5 : 2.5}" fill="${isNow ? lineColor : 'var(--text-dim)'}" stroke="var(--panel)" stroke-width="${isNow ? 1.8 : 1}"/>`;
+        dots += `<circle cx="${xS(i)}" cy="${yS(d.rate)}" r="${isNow ? 5 : 2}" fill="${isNow ? lineColor : 'var(--text-dim)'}" stroke="var(--panel)" stroke-width="${isNow ? 1.8 : 1}" opacity="${isNow ? 1 : 0.5}"/>`;
     });
 
     let xlbl = '';
@@ -679,21 +891,26 @@ function renderMeetingHistoryChart(code, meetingIdx) {
     hist.forEach((d, i) => {
         if (i % step !== 0 && i !== n-1) return;
         const fill = i === n-1 ? lineColor : 'var(--text-dim)';
-        xlbl += `<text x="${xS(i)}" y="${H-PAD.b+14}" text-anchor="middle" font-size="8.5" fill="${fill}" font-family="JetBrains Mono,monospace">${i === n-1 ? 'Now' : d.label}</text>`;
+        const anchor = i === 0 ? 'start' : i === n-1 ? 'end' : 'middle';
+        const lbl = i === n-1 ? 'Today' : d.label.replace(' 20', ' \'').replace(/(\d+) (\w+) '(\d{2})/, '$2 \'$3');
+        xlbl += `<text x="${xS(i)}" y="${H-PAD.b+14}" text-anchor="${anchor}" font-size="10" fill="${fill}" font-family="system-ui,sans-serif">${lbl}</text>`;
     });
-    xlbl += `<text x="${PAD.l}" y="${H-PAD.b+26}" text-anchor="start" font-size="7.5" fill="var(--text-dim)" font-family="JetBrains Mono,monospace">← oldest</text>`;
-    xlbl += `<text x="${PAD.l+cw}" y="${H-PAD.b+26}" text-anchor="end" font-size="7.5" fill="${lineColor}" font-family="JetBrains Mono,monospace">Today →</text>`;
+
+    // Legend: event markers
+    const evLegend = evDecisions.length ? `<span style="display:inline-flex;align-items:center;gap:4px;"><span style="display:inline-block;width:2px;height:14px;border-left:2px dashed #94a3b8;vertical-align:middle;"></span><span style="font-size:0.6rem;color:var(--text-mid);">CB decision</span></span>` : '';
 
     el.innerHTML = `
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:6px;">
-            <span style="font-size:0.62rem;color:var(--text-mid);">${m.abbr} · ${meeting.meeting} · Current implied: ${currentImplied.toFixed(3)}%</span>
-            <span style="display:flex;align-items:center;gap:14px;font-size:0.6rem;color:var(--text-mid);">
-                <span style="display:inline-flex;align-items:center;gap:4px;"><span style="display:inline-block;width:18px;height:2px;background:${lineColor};vertical-align:middle;"></span>Implied rate</span>
+            <span style="font-size:0.65rem;color:var(--text-mid);font-weight:500;">${m.abbr} &middot; ${meeting.meeting} &middot; Current implied: <strong style="color:var(--text);">${currentImplied.toFixed(3)}%</strong></span>
+            <span style="display:flex;align-items:center;gap:12px;font-size:0.6rem;color:var(--text-mid);flex-wrap:wrap;row-gap:4px;">
+                <span style="display:inline-flex;align-items:center;gap:4px;"><span style="display:inline-block;width:18px;height:2px;background:${lineColor};vertical-align:middle;border-radius:1px;"></span>Implied rate</span>
                 <span style="display:inline-flex;align-items:center;gap:4px;"><span style="display:inline-block;width:18px;border-top:1.5px dashed var(--text-dim);vertical-align:middle;"></span>Spot rate</span>
+                ${evLegend}
             </span>
         </div>
         <svg width="100%" height="185" viewBox="0 0 ${W} ${H}" style="overflow:visible;">
             ${g}
+            ${evMarkers}
             <path d="${area}" fill="${aFill}"/>
             <path d="${path}" fill="none" stroke="${lineColor}" stroke-width="2.2" stroke-linejoin="round"/>
             ${dots}${xlbl}
