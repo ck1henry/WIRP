@@ -1,0 +1,739 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WIRP — World Interest Rate Probabilities</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg:         #f0f4f8;
+            --panel:      #ffffff;
+            --panel-alt:  #f8fafc;
+            --panel-hi:   #f1f5f9;
+            --border:     #cbd5e1;
+            --border-sub: #e2e8f0;
+            --amber:      #b45309;
+            --amber-dim:  rgba(180,83,9,0.08);
+            --text:       #1e293b;
+            --text-mid:   #64748b;
+            --text-dim:   #94a3b8;
+            --green:      #15803d;
+            --green-bg:   rgba(21,128,61,0.08);
+            --red:        #b91c1c;
+            --red-bg:     rgba(185,28,28,0.08);
+            --blue:       #1d4ed8;
+            --row-hover:  #f8fafc;
+        }
+        *, *::before, *::after { box-sizing: border-box; }
+        html, body { font-family:'Inter','Segoe UI','Helvetica Neue',Arial,sans-serif; background:var(--bg); color:var(--text); min-height:100vh; margin:0; -webkit-font-smoothing:antialiased; }
+        code, .mono { font-family:'JetBrains Mono','Fira Code','Courier New',monospace; }
+        ::-webkit-scrollbar { width:6px; height:6px; }
+        ::-webkit-scrollbar-track { background:var(--bg); }
+        ::-webkit-scrollbar-thumb { background:var(--border); border-radius:3px; }
+        .header-accent { height:3px; background:linear-gradient(90deg,var(--amber) 0%,#d97706 40%,transparent 75%); }
+
+        /* ── Market tabs ── */
+        .tab-btn { padding:9px 16px; font-size:0.7rem; font-family:'Inter',sans-serif; font-weight:600; letter-spacing:0.07em; cursor:pointer; border:none; border-top:2px solid transparent; border-bottom:1px solid var(--border-sub); background:var(--panel); color:var(--text-mid); text-transform:uppercase; transition:color 0.15s,border-top-color 0.15s,background 0.15s; white-space:nowrap; display:inline-flex; align-items:center; gap:5px; }
+        .tab-btn:hover { color:var(--amber); background:var(--panel-alt); }
+        .tab-btn.active { color:var(--amber); border-top-color:var(--amber); background:var(--panel-alt); }
+        .tab-btn.hidden { display:none; }
+        .tab-src-dot { width:6px; height:6px; border-radius:50%; flex-shrink:0; }
+
+        /* ── Table rows ── */
+        .data-row { display:grid; grid-template-columns:2fr 1.15fr 1.15fr; align-items:center; padding:9px 22px; border-bottom:1px solid var(--border-sub); transition:background 0.1s; }
+        .data-row:hover { background:var(--row-hover) !important; }
+        .data-row:last-child { border-bottom:none; }
+
+        /* ── Live dot ── */
+        @keyframes pulse-live { 0%{box-shadow:0 0 0 0 rgba(21,128,61,.5)} 70%{box-shadow:0 0 0 7px rgba(21,128,61,0)} 100%{box-shadow:0 0 0 0 rgba(21,128,61,0)} }
+        .live-dot { width:8px; height:8px; border-radius:50%; background:var(--green); animation:pulse-live 2s ease-out infinite; }
+
+        /* ── Summary strip ── */
+        #summaryStrip { background:var(--panel); border-left:1px solid var(--border); border-right:1px solid var(--border); border-bottom:1px solid var(--border-sub); padding:11px 22px; display:grid; grid-template-columns:repeat(auto-fill,minmax(130px,1fr)); gap:10px 0; }
+        .strip-item { display:flex; flex-direction:column; justify-content:center; padding:4px 16px 4px 0; border-right:1px solid var(--border-sub); }
+        .strip-item:last-child { border-right:none; padding-right:0; }
+        .strip-label { font-size:0.58rem; color:var(--text-dim); letter-spacing:0.12em; text-transform:uppercase; margin-bottom:3px; }
+        .strip-value { font-size:0.88rem; font-weight:700; color:var(--amber); }
+
+        /* ── Row flash ── */
+        @keyframes row-flash { from{background-color:rgba(180,83,9,.06)!important} to{background-color:inherit} }
+        .flash { animation:row-flash 0.8s ease-out; }
+
+        /* ── Stance badge ── */
+        .stance-badge { display:inline-flex; align-items:center; gap:4px; font-size:0.6rem; font-weight:700; letter-spacing:0.09em; padding:2px 8px; border-radius:3px; text-transform:uppercase; }
+        .stance-very-dovish { background:var(--red-bg); color:var(--red); border:1px solid rgba(185,28,28,.3); }
+        .stance-dovish      { background:var(--red-bg); color:#c0392b; border:1px solid rgba(185,28,28,.2); }
+        .stance-neutral     { background:var(--amber-dim); color:var(--amber); border:1px solid rgba(180,83,9,.3); }
+        .stance-hawkish     { background:var(--green-bg); color:var(--green); border:1px solid rgba(21,128,61,.3); }
+
+        .next-tag { font-size:0.52rem; font-weight:700; letter-spacing:0.08em; padding:1px 5px; border-radius:2px; text-transform:uppercase; background:var(--amber-dim); color:var(--amber); border:1px solid rgba(180,83,9,.3); margin-left:6px; vertical-align:middle; }
+
+        #chartArea { background:var(--panel); border-left:1px solid var(--border); border-right:1px solid var(--border); border-bottom:1px solid var(--border-sub); padding:14px 22px 8px; }
+
+        .totals-row { display:grid; grid-template-columns:2fr 1.15fr 1.15fr; align-items:center; padding:9px 22px; background:var(--panel-hi); border-top:1px solid var(--border); }
+
+        .mkt-card { flex:1; min-width:170px; cursor:pointer; background:var(--panel); border:1px solid var(--border-sub); border-radius:5px; padding:10px 13px; transition:border-color .15s,background .15s,box-shadow .15s; box-shadow:0 1px 3px rgba(0,0,0,.05); }
+        .mkt-card:hover { background:var(--panel-alt); border-color:var(--border); box-shadow:0 2px 6px rgba(0,0,0,.08); }
+        .mkt-card.active-card { background:var(--panel-alt); border-color:var(--amber); box-shadow:0 0 0 1px var(--amber); }
+
+        .region-group-header { font-size:0.58rem; color:var(--text-dim); letter-spacing:0.12em; text-transform:uppercase; margin:14px 0 7px; }
+        .region-group-header:first-child { margin-top:0; }
+
+        .chart-tooltip { position:absolute; background:var(--panel); border:1px solid var(--border); color:var(--text); font-size:0.67rem; padding:5px 9px; border-radius:4px; pointer-events:none; white-space:nowrap; z-index:100; display:none; box-shadow:0 4px 12px rgba(0,0,0,.12); }
+
+        /* ── Meeting toggle pills ── */
+        .mtg-btn { padding:4px 11px; font-size:0.63rem; font-weight:500; cursor:pointer; border:1px solid var(--border); border-radius:4px; background:var(--panel-alt); color:var(--text-mid); transition:all 0.13s; white-space:nowrap; }
+        .mtg-btn:hover  { border-color:var(--amber); color:var(--amber); background:var(--amber-dim); }
+        .mtg-btn.active { border-color:var(--amber); color:var(--amber); background:var(--amber-dim); font-weight:600; }
+        #meetingToggleRow { display:flex; gap:5px; flex-wrap:wrap; margin:10px 0 14px; }
+
+        /* ── Mobile ── */
+        @media (max-width:640px) {
+            #container { padding:8px; }
+            #utcClock { display:none; }
+            .data-row { grid-template-columns:2fr 1fr 1fr; padding:8px 12px; }
+            .totals-row { grid-template-columns:2fr 1fr 1fr; padding:8px 12px; }
+            #summaryStrip { padding:10px 12px; }
+            .strip-item { padding:4px 10px 4px 0; }
+            #chartArea { padding:12px 12px 8px; }
+            #historyChartArea { padding:12px 12px 10px; }
+            .tab-btn { padding:9px 12px; font-size:0.68rem; }
+            .mkt-card { min-width:140px; }
+            #meetingToggleRow { gap:4px; }
+            .mtg-btn { padding:4px 8px; font-size:0.6rem; }
+        }
+    </style>
+</head>
+<body>
+<div id="tooltip" class="chart-tooltip"></div>
+<div id="container" style="max-width:1160px;margin:0 auto;padding:16px;">
+
+<!-- ══════════════ HEADER ══════════════ -->
+<div style="background:var(--panel);border:1px solid var(--border);">
+    <div class="header-accent"></div>
+    <div style="padding:12px 22px;display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;">
+        <div>
+            <h1 style="font-size:1.05rem;font-weight:700;letter-spacing:0.08em;margin:0 0 5px;text-transform:uppercase;color:var(--amber);">WIRP — World Interest Rate Probabilities</h1>
+            <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+                <span style="font-size:0.64rem;color:var(--text-mid);">OIS / Futures Implied &nbsp;·&nbsp; 25 bps step</span>
+                <span style="color:var(--border);">│</span>
+                <span style="font-size:0.64rem;color:var(--text-mid);">Updated: <strong id="dataTimestamp" style="color:var(--amber);">—</strong></span>
+                <span style="color:var(--border);">│</span>
+                <div style="display:inline-flex;align-items:center;gap:6px;">
+                    <div class="live-dot"></div>
+                    <span style="font-size:0.62rem;color:var(--green);font-weight:600;">LIVE</span>
+                    <span id="refreshCountdown" style="font-size:0.58rem;color:var(--text-dim);">REF: 5s</span>
+                </div>
+            </div>
+        </div>
+        <div id="utcClock" style="text-align:right;">
+            <div id="utcTime" style="font-size:1.4rem;font-weight:700;letter-spacing:0.04em;line-height:1;color:var(--amber);">00:00:00</div>
+            <div id="utcDate" style="font-size:0.62rem;color:var(--text-mid);margin-top:2px;"></div>
+        </div>
+    </div>
+</div>
+
+<!-- ══════════════ MARKET NAV ══════════════ -->
+<div style="background:var(--panel);border-left:1px solid var(--border);border-right:1px solid var(--border);border-bottom:1px solid var(--border-sub);padding:0 22px;display:flex;align-items:stretch;overflow-x:auto;">
+    <button class="tab-btn active" id="tab-US" onclick="switchTab('US')">US <span style="opacity:.5;font-size:.8em;">(Fed)</span></button>
+    <button class="tab-btn"        id="tab-CA" onclick="switchTab('CA')">CA <span style="opacity:.5;font-size:.8em;">(BOC)</span></button>
+    <button class="tab-btn"        id="tab-EU" onclick="switchTab('EU')">EU <span style="opacity:.5;font-size:.8em;">(ECB)</span></button>
+    <button class="tab-btn"        id="tab-UK" onclick="switchTab('UK')">UK <span style="opacity:.5;font-size:.8em;">(BOE)</span></button>
+    <button class="tab-btn"        id="tab-AU" onclick="switchTab('AU')">AU <span style="opacity:.5;font-size:.8em;">(RBA)</span></button>
+    <div style="flex:1;border-bottom:1px solid var(--border-sub);min-width:10px;"></div>
+    <div style="display:flex;align-items:center;gap:10px;padding:0 0 0 12px;border-bottom:1px solid var(--border-sub);">
+        <span id="stanceBadge"></span>
+        <span id="daysUntil" style="font-size:0.62rem;color:var(--text-dim);white-space:nowrap;"></span>
+    </div>
+</div>
+
+<!-- ══════════════ SUMMARY STRIP ══════════════ -->
+<div id="summaryStrip"></div>
+
+<!-- ══════════════ FORWARD RATE CHART ══════════════ -->
+<div id="chartArea">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+        <span id="chartTitle" style="font-size:0.6rem;color:var(--text-dim);letter-spacing:0.1em;text-transform:uppercase;">Implied Rate Path · Forward Curve</span>
+        <span style="font-size:0.58rem;color:var(--text-dim);">
+            <span id="chartLegendLine" style="display:inline-block;width:20px;height:2px;background:var(--amber);vertical-align:middle;margin-right:4px;"></span>Implied
+            &nbsp;
+            <span style="display:inline-block;width:20px;border-top:2px dashed var(--text-dim);vertical-align:middle;margin-right:4px;"></span>Current Rate
+        </span>
+    </div>
+    <svg id="rateChart" width="100%" height="150" style="overflow:visible;"></svg>
+</div>
+
+<!-- ══════════════ TABLE HEADER ══════════════ -->
+<div style="background:var(--panel);border-left:1px solid var(--border);border-right:1px solid var(--border);border-bottom:1px solid var(--border);">
+    <div class="data-row" style="padding-top:6px;padding-bottom:6px;border-bottom:none;">
+        <div style="font-size:0.58rem;color:var(--text-dim);letter-spacing:0.1em;text-transform:uppercase;">#&nbsp;&nbsp;Meeting Date</div>
+        <div style="font-size:0.58rem;color:var(--text-dim);letter-spacing:0.1em;text-transform:uppercase;text-align:right;">Implied Rate</div>
+        <div style="font-size:0.58rem;color:var(--text-dim);letter-spacing:0.1em;text-transform:uppercase;text-align:right;">±bps</div>
+    </div>
+</div>
+
+<!-- ══════════════ TABLE BODY ══════════════ -->
+<div id="tableBody" style="border-left:1px solid var(--border);border-right:1px solid var(--border);"></div>
+
+<!-- ══════════════ TOTALS ROW ══════════════ -->
+<div id="totalsRow" style="border-left:1px solid var(--border);border-right:1px solid var(--border);border-bottom:1px solid var(--border);"></div>
+
+<!-- ══════════════ MEETING REPRICING HISTORY ══════════════ -->
+<div id="historyChartArea" style="background:var(--panel);border-left:1px solid var(--border);border-right:1px solid var(--border);border-bottom:1px solid var(--border-sub);padding:14px 22px 12px;">
+    <!-- Header row -->
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px;">
+        <div>
+            <span style="font-size:0.72rem;font-weight:600;color:var(--text);">Market Pricing History</span>
+            <span style="font-size:0.6rem;color:var(--text-dim);margin-left:10px;">How OIS-implied expectations for a specific meeting have evolved over the past 12 months</span>
+        </div>
+        <div id="histRepriceStat" style="text-align:right;"></div>
+    </div>
+    <!-- Meeting selector -->
+    <div id="meetingToggleRow"></div>
+    <!-- Chart title line -->
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:6px;">
+        <span id="histChartTitle" style="font-size:0.62rem;color:var(--text-mid);"></span>
+        <span style="display:flex;align-items:center;gap:14px;font-size:0.6rem;color:var(--text-mid);">
+            <span style="display:inline-flex;align-items:center;gap:4px;"><span id="histLineLegend" style="display:inline-block;width:18px;height:2px;background:var(--amber);vertical-align:middle;"></span>Implied rate for meeting</span>
+            <span style="display:inline-flex;align-items:center;gap:4px;"><span style="display:inline-block;width:18px;border-top:1.5px dashed var(--text-dim);vertical-align:middle;"></span>Current spot rate</span>
+        </span>
+    </div>
+    <svg id="historyChart" width="100%" height="185" style="overflow:visible;"></svg>
+    <div style="font-size:0.55rem;color:var(--text-dim);margin-top:6px;font-style:italic;">Simulated historical OIS-implied pricing. In production, feed from a time-series database of daily OIS snapshots.</div>
+</div>
+
+<!-- ══════════════ CROSS-MARKET OVERVIEW ══════════════ -->
+<div id="crossMarket"></div>
+
+<!-- ══════════════ FOOTER ══════════════ -->
+<div style="background:var(--panel);border:1px solid var(--border);border-top:none;padding:9px 22px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+    <span style="font-size:0.57rem;color:var(--text-dim);">
+        OIS / futures-implied rates. US: CME FF futures · EU: ECB YC · UK: SONIA OIS · CA: BOC CORRA · AU: RBA BABs. Updated daily at 07:00 UTC.
+    </span>
+    <div style="display:flex;gap:14px;align-items:center;">
+        <span style="font-size:0.57rem;"><span style="color:var(--green);">▲ Hike</span>&nbsp;&nbsp;<span style="color:var(--red);">▼ Cut</span>&nbsp;&nbsp;<span style="color:var(--amber);">━ Hold</span></span>
+        <span style="font-size:0.57rem;color:var(--text-dim);">WIRP v2.0 │ 2026</span>
+    </div>
+</div>
+
+</div><!-- /container -->
+
+<!-- ══════════ DATA BLOCK — injected daily by update_data.py ══════════ -->
+<!-- WIRP_DATA_BEGIN -->
+<script>
+const MARKET_DATA={"US":{"rate":3.625,"meetings":["29 Apr 2026","17 Jun 2026","29 Jul 2026","16 Sep 2026","28 Oct 2026","09 Dec 2026","27 Jan 2027","17 Mar 2027"],"name":"Federal Reserve","abbr":"FOMC","drift":0.0,"region":"Americas","live":true,"source":"CME FF futures (Yahoo Finance)","impliedRates":[3.645,3.635,3.635,3.645,3.655,3.63,3.625,3.62]},"EU":{"rate":2.0,"meetings":["08 Apr 2026","30 Apr 2026","11 Jun 2026","23 Jul 2026","10 Sep 2026","29 Oct 2026","17 Dec 2026"],"name":"European Central Bank","abbr":"ECB GC","drift":0.0,"region":"Europe","live":true,"source":"ECB SDW API + ecb.europa.eu","impliedRates":[2.0,2.0,2.0,2.0314,2.1134,2.18,2.2324]},"UK":{"rate":3.75,"meetings":["30 Apr 2026","18 Jun 2026","30 Jul 2026","17 Sep 2026","05 Nov 2026","17 Dec 2026","04 Feb 2027","18 Mar 2027"],"name":"Bank of England","abbr":"MPC","drift":0.0,"region":"Europe","live":true,"source":"bankofengland.co.uk","impliedRates":[3.7444,3.8738,3.9931,4.1025,4.1723,4.208,4.2386,4.2572]},"CA":{"meetings":["16 Apr 2026","04 Jun 2026","15 Jul 2026","09 Sep 2026","21 Oct 2026","09 Dec 2026","21 Jan 2027","04 Mar 2027"],"rate":2.25,"name":"Bank of Canada","abbr":"BOC","region":"Americas","drift":0.0,"live":true,"source":"bankofcanada.ca","impliedRates":[2.2425,2.2928,2.3349,2.3924,2.4356,2.4859,2.5301,2.5732]},"AU":{"meetings":["19 May 2026","07 Jul 2026","11 Aug 2026","22 Sep 2026","03 Nov 2026","08 Dec 2026","03 Feb 2027","17 Mar 2027"],"rate":4.1,"name":"Reserve Bank of Australia","abbr":"RBA","region":"Asia-Pac","drift":0.0,"live":true,"source":"rba.gov.au","impliedRates":[3.9279,4.0603,4.2133,4.3969,4.4472,4.4472,4.4472,4.4472]}};
+const LAST_UPDATED="04 Apr 2026 19:07 UTC";
+</script>
+<!-- WIRP_DATA_END -->
+
+<!-- ══════════════════════════════ JAVASCRIPT ══════════════════════════════ -->
+<script>
+'use strict';
+
+const markets    = MARKET_DATA;
+const ALL_CODES  = Object.keys(markets);
+const REGION_MAP = Object.fromEntries(ALL_CODES.map(c => [c, markets[c].region]));
+
+let currentMarket    = 'US';
+let cachedData       = {};
+let cachedHistorical = {};
+let currentMeetingIdx= 0;
+let countdown        = 5;
+
+const MON     = {Jan:0,Feb:1,Mar:2,Apr:3,May:4,Jun:5,Jul:6,Aug:7,Sep:8,Oct:9,Nov:10,Dec:11};
+const MON_ARR = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+function parseMeetingDate(str) {
+    const clean = str.replace(/\s*\(.*\)/,'').trim().split(' ');
+    return new Date(Date.UTC(+clean[2], MON[clean[1]], +clean[0]));
+}
+
+function daysUntilMeeting(code) {
+    const mtgs = markets[code].meetings;
+    if (!mtgs || !mtgs.length) return null;
+    const today = new Date(); today.setUTCHours(0,0,0,0);
+    return Math.ceil((parseMeetingDate(mtgs[0]) - today) / 86400000);
+}
+
+function getStance(bps) {
+    if (bps <= -50) return {label:'Very Dovish', cls:'stance-very-dovish'};
+    if (bps <= -15) return {label:'Dovish',      cls:'stance-dovish'};
+    if (bps >=  15) return {label:'Hawkish',     cls:'stance-hawkish'};
+    return               {label:'Neutral',     cls:'stance-neutral'};
+}
+
+// ── Clock ──
+function updateClock() {
+    const n = new Date(), p = v => String(v).padStart(2,'0');
+    document.getElementById('utcTime').textContent = `${p(n.getUTCHours())}:${p(n.getUTCMinutes())}:${p(n.getUTCSeconds())}`;
+    const D=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'], M=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    document.getElementById('utcDate').textContent = `${D[n.getUTCDay()]} ${p(n.getUTCDate())} ${M[n.getUTCMonth()]} ${n.getUTCFullYear()} UTC`;
+}
+
+function tickCountdown() {
+    if (--countdown <= 0) {
+        countdown = 5;
+        cachedData[currentMarket] = generateData(currentMarket);
+        renderAll(currentMarket, true);
+    }
+    const el = document.getElementById('refreshCountdown');
+    if (el) el.textContent = `REF: ${countdown}s`;
+}
+
+// ── Data ──
+function generateData(code) {
+    const m = markets[code], n = m.meetings.length;
+    return m.meetings.map((meeting, i) => {
+        let implied;
+        if (m.impliedRates && i < m.impliedRates.length && m.impliedRates[i] != null) {
+            // Real market data (OIS / futures)
+            implied = m.impliedRates[i];
+        } else {
+            // Drift model — deterministic linear path, no random noise
+            const drift = (m.drift / Math.max(n - 1, 1)) * i;
+            implied = m.rate + drift;
+        }
+        const change = implied - m.rate;
+        const bps    = change * 100;
+        return {
+            meeting,
+            impliedRate:      parseFloat(implied.toFixed(3)),
+            impliedChangeBps: parseFloat(bps.toFixed(1)),
+            hikeProb:         parseFloat((change > 0 ? Math.min((change / 0.25) * 100, 100) : 0).toFixed(1)),
+            cutProb:          parseFloat((change < 0 ? Math.min((Math.abs(change) / 0.25) * 100, 100) : 0).toFixed(1)),
+        };
+    });
+}
+
+// ── Summary strip ──
+function renderSummary(code) {
+    const m = markets[code], data = cachedData[code];
+    const last = data[data.length - 1];
+    const totalBps = parseFloat(((last.impliedRate - m.rate) * 100).toFixed(1));
+    const chgColor = totalBps > 0 ? 'var(--green)' : totalBps < 0 ? 'var(--red)' : 'var(--amber)';
+    const cumBps   = parseFloat(data.reduce((s,d) => s + d.impliedChangeBps, 0).toFixed(1));
+    const cutsN    = data.filter(d => d.cutProb  > 60).length;
+    const hikesN   = data.filter(d => d.hikeProb > 60).length;
+
+    const isLive = m.live === true;
+    const srcText = m.source || (isLive ? 'Live web scrape' : 'Hardcoded schedule');
+    const srcColor = isLive ? 'var(--green)' : 'var(--amber)';
+    const srcLabel = isLive ? 'Live' : 'Static';
+
+    document.getElementById('summaryStrip').innerHTML = `
+        <div class="strip-item"><div class="strip-label">Central Bank</div><div class="strip-value" style="font-size:.76rem;">${m.name}</div></div>
+        <div class="strip-item"><div class="strip-label">Committee</div><div class="strip-value">${m.abbr}</div></div>
+        <div class="strip-item"><div class="strip-label">Region</div><div class="strip-value" style="font-size:.76rem;color:var(--text-mid);">${m.region}</div></div>
+        <div class="strip-item"><div class="strip-label">Current Rate</div><div class="strip-value">${m.rate.toFixed(3)}<span style="font-size:.68rem;color:var(--text-mid);">%</span></div></div>
+        <div class="strip-item"><div class="strip-label">Priced 12M Change</div><div class="strip-value" style="color:${chgColor};">${totalBps >= 0 ? '+' : ''}${totalBps}<span style="font-size:.68rem;"> bps</span></div></div>
+        <div class="strip-item"><div class="strip-label">Implied Rate (1Y)</div><div class="strip-value">${last.impliedRate.toFixed(3)}<span style="font-size:.68rem;color:var(--text-mid);">%</span></div></div>
+        <div class="strip-item"><div class="strip-label">Cum. Implied Chg</div><div class="strip-value" style="color:${cumBps >= 0 ? 'var(--green)' : 'var(--red)'};">${cumBps >= 0 ? '+' : ''}${cumBps}<span style="font-size:.68rem;"> bps</span></div></div>
+        <div class="strip-item"><div class="strip-label">Cuts &gt;60%</div><div class="strip-value" style="color:${cutsN ? 'var(--red)' : 'var(--amber)'};">${cutsN}</div></div>
+        <div class="strip-item"><div class="strip-label">Hikes &gt;60%</div><div class="strip-value" style="color:${hikesN ? 'var(--green)' : 'var(--amber)'};">${hikesN}</div></div>
+        <div class="strip-item" style="border-right:none;margin-right:0;"><div class="strip-label">Data Source</div><div style="display:flex;align-items:center;gap:5px;margin-top:1px;"><span style="width:7px;height:7px;border-radius:50%;background:${srcColor};display:inline-block;flex-shrink:0;"></span><span style="font-size:.65rem;font-weight:600;color:${srcColor};">${srcLabel}</span><span style="font-size:.58rem;color:var(--text-mid);max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${srcText}">${srcText}</span></div></div>`;
+
+    const stance = getStance(totalBps);
+    const days   = daysUntilMeeting(code);
+    document.getElementById('stanceBadge').innerHTML = `<span class="stance-badge ${stance.cls}">${stance.label}</span>`;
+    document.getElementById('daysUntil').textContent = days !== null ? `Next meeting: ${days}d` : '';
+}
+
+// ── SVG chart ──
+function renderChart(code) {
+    const m = markets[code], data = cachedData[code];
+    const svg = document.getElementById('rateChart');
+    const W   = Math.max(svg.parentElement.clientWidth - 44, 300);
+    const H = 150, PAD = {t:10, r:18, b:34, l:52};
+    const n = data.length;
+    const rates = data.map(d => d.impliedRate);
+    const allR  = [m.rate, ...rates];
+    const _rMin = Math.min(...allR), _rMax = Math.max(...allR);
+    const _rng  = _rMax - _rMin || 0.01;
+    const _step = _rng <= 0.12 ? 0.05 : _rng <= 0.30 ? 0.10 : _rng <= 0.75 ? 0.25 : _rng <= 1.50 ? 0.50 : 1.00;
+    const _S    = 1e6;
+    const minR  = Math.floor(Math.round(_rMin * _S) / _S / _step) * _step;
+    const maxR  = Math.ceil(Math.round(_rMax * _S) / _S / _step) * _step;
+    const cw = W - PAD.l - PAD.r, ch = H - PAD.t - PAD.b;
+    const xS = i => PAD.l + (n > 1 ? (i / (n-1)) * cw : cw/2);
+    const yS = v => PAD.t + ch - ((v - minR) / Math.max(maxR - minR, 0.01)) * ch;
+
+    const _netChg = data[data.length - 1].impliedRate - m.rate;
+    const lc  = _netChg < -0.05 ? 'var(--red)' : _netChg > 0.05 ? 'var(--green)' : 'var(--amber)';
+    const ac  = _netChg < -0.05 ? 'var(--red-bg)' : _netChg > 0.05 ? 'var(--green-bg)' : 'var(--amber-dim)';
+
+    const sw = document.getElementById('chartLegendLine');
+    if (sw) sw.style.background = lc;
+    const _src = m.impliedRates ? 'Futures / OIS' : 'Model (drift)';
+    document.getElementById('chartTitle').textContent = `${m.name}  ·  Implied Rate Path  ·  ${_src}`;
+
+    let grid = '';
+    for (let v = minR; v <= maxR + _step * 0.001; v = Math.round((v + _step) * _S) / _S) {
+        const y = yS(v);
+        grid += `<line x1="${PAD.l}" y1="${y}" x2="${PAD.l+cw}" y2="${y}" stroke="var(--border-sub)" stroke-width="1"/>`;
+        grid += `<text x="${PAD.l-6}" y="${y+4}" text-anchor="end" font-size="9" fill="var(--text-dim)" font-family="JetBrains Mono,monospace">${v.toFixed(2)}%</text>`;
+    }
+    const bY = yS(m.rate);
+    grid += `<line x1="${PAD.l}" y1="${bY}" x2="${PAD.l+cw}" y2="${bY}" stroke="var(--text-dim)" stroke-width="1" stroke-dasharray="4,3"/>`;
+
+    let area = `M ${xS(0)} ${yS(rates[0])}`, line = area;
+    for (let i = 1; i < n; i++) { area += ` L ${xS(i)} ${yS(rates[i])}`; line += ` L ${xS(i)} ${yS(rates[i])}`; }
+    area += ` L ${xS(n-1)} ${H-PAD.b} L ${xS(0)} ${H-PAD.b} Z`;
+
+    let dots = '';
+    data.forEach((d, i) => {
+        const cx = xS(i), cy = yS(d.impliedRate);
+        const cs = (d.impliedChangeBps >= 0 ? '+' : '') + d.impliedChangeBps.toFixed(1) + ' bps';
+        dots += `<circle cx="${cx}" cy="${cy}" r="3.5" fill="${lc}" stroke="var(--panel-alt)" stroke-width="1.5"/>`;
+        dots += `<circle cx="${cx}" cy="${cy}" r="12" fill="transparent" onmouseenter="showTip(event,'${d.meeting}\\n${d.impliedRate.toFixed(3)}% (${cs})')" onmouseleave="hideTip()"/>`;
+        if (n <= 8 || i % 2 === 0) {
+            const lbl = d.meeting.replace(/ \d{4}.*/,'');
+            dots += `<text x="${cx}" y="${H-PAD.b+14}" text-anchor="middle" font-size="8.5" fill="var(--text-dim)" font-family="JetBrains Mono,monospace">${lbl}</text>`;
+        }
+    });
+
+    svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+    svg.innerHTML = grid + `<path d="${area}" fill="${ac}"/><path d="${line}" fill="none" stroke="${lc}" stroke-width="2" stroke-linejoin="round"/>` + dots;
+}
+
+// ── Table ──
+function renderTable(code, flash = false) {
+    const m = markets[code], data = cachedData[code];
+    let html = '';
+    data.forEach((row, i) => {
+        const bg  = i % 2 === 0 ? 'var(--panel)' : 'var(--panel-alt)';
+        const chgColor = row.impliedChangeBps > 0 ? 'var(--green)' : row.impliedChangeBps < 0 ? 'var(--red)' : 'var(--text-mid)';
+        let arrow = '━', ac = 'var(--text-dim)';
+        if (row.impliedChangeBps >= 1)  { arrow = '▲'; ac = 'var(--green)'; }
+        if (row.impliedChangeBps <= -1) { arrow = '▼'; ac = 'var(--red)'; }
+        html += `<div class="data-row${flash ? ' flash' : ''}" style="background:${bg};">
+            <div style="display:flex;align-items:center;gap:7px;">
+                <span style="font-size:.61rem;color:var(--text-dim);min-width:14px;text-align:right;">${i+1}</span>
+                <span style="font-size:.7rem;color:${ac};">${arrow}</span>
+                <span style="font-size:.82rem;color:var(--text);">${row.meeting}</span>
+                ${i === 0 ? '<span class="next-tag">NEXT</span>' : ''}
+            </div>
+            <div style="text-align:right;"><span style="font-size:.85rem;font-weight:600;color:var(--text);">${row.impliedRate.toFixed(3)}</span><span style="font-size:.61rem;color:var(--text-mid);">%</span></div>
+            <div style="text-align:right;"><span style="font-size:.85rem;font-weight:700;color:${chgColor};">${row.impliedChangeBps >= 0 ? '+' : ''}${row.impliedChangeBps.toFixed(1)}</span><span style="font-size:.58rem;color:var(--text-dim);"> bps</span></div>
+        </div>`;
+    });
+    document.getElementById('tableBody').innerHTML = html;
+
+    const tot = data.reduce((s,d) => s + d.impliedChangeBps, 0);
+    const tc  = tot > 0 ? 'var(--green)' : tot < 0 ? 'var(--red)' : 'var(--text-mid)';
+    document.getElementById('totalsRow').innerHTML = `
+        <div class="totals-row">
+            <div style="font-size:.6rem;color:var(--text-dim);letter-spacing:.09em;text-transform:uppercase;">Cumulative implied change</div>
+            <div></div>
+            <div style="text-align:right;"><span style="font-size:.85rem;font-weight:700;color:${tc};">${tot >= 0 ? '+' : ''}${tot.toFixed(1)}</span><span style="font-size:.58rem;color:var(--text-dim);"> bps</span></div>
+        </div>`;
+}
+
+// ── Cross-market global overview ──
+function renderCrossMarket() {
+    const regions = ['Americas','Europe','Asia-Pac'];
+    let html = `<div style="background:var(--panel);border:1px solid var(--border);border-top:none;padding:14px 22px 16px;">
+        <div style="font-size:.58rem;color:var(--text-dim);letter-spacing:.1em;text-transform:uppercase;margin-bottom:10px;">
+            Global Overview &nbsp;·&nbsp; 5 Central Banks &nbsp;·&nbsp; Click any card to switch
+        </div>`;
+
+    regions.forEach(region => {
+        html += `<div class="region-group-header">${region}</div><div style="display:flex;gap:9px;flex-wrap:wrap;margin-bottom:2px;">`;
+        ALL_CODES.filter(c => REGION_MAP[c] === region).forEach(code => {
+            const m = markets[code], data = cachedData[code];
+            if (!data || !data.length) return;
+            const last     = data[data.length - 1];
+            const totalBps = parseFloat(((last.impliedRate - m.rate) * 100).toFixed(1));
+            const chgColor = totalBps < 0 ? 'var(--red)' : totalBps > 0 ? 'var(--green)' : 'var(--text-mid)';
+            const stance   = getStance(totalBps);
+            const isActive = code === currentMarket;
+
+            html += `<div class="mkt-card ${isActive ? 'active-card' : ''}" onclick="switchTab('${code}')">
+                <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px;">
+                    <div>
+                        <div style="font-size:.57rem;color:var(--text-dim);letter-spacing:.09em;text-transform:uppercase;">${m.abbr}</div>
+                        <div style="font-size:.7rem;color:var(--text);font-weight:600;margin-top:1px;">${code}</div>
+                    </div>
+                    <span class="stance-badge ${stance.cls}" style="font-size:.5rem;">${stance.label}</span>
+                </div>
+                <div style="display:flex;gap:12px;">
+                    <div>
+                        <div style="font-size:.53rem;color:var(--text-dim);letter-spacing:.09em;text-transform:uppercase;margin-bottom:1px;">Rate</div>
+                        <div style="font-size:.9rem;font-weight:700;color:var(--amber);">${m.rate.toFixed(2)}<span style="font-size:.58rem;font-weight:400;color:var(--text-mid);">%</span></div>
+                    </div>
+                    <div>
+                        <div style="font-size:.53rem;color:var(--text-dim);letter-spacing:.09em;text-transform:uppercase;margin-bottom:1px;">12M Chg</div>
+                        <div style="font-size:.9rem;font-weight:700;color:${chgColor};">${totalBps >= 0 ? '+' : ''}${totalBps}<span style="font-size:.58rem;font-weight:400;"> bps</span></div>
+                    </div>
+                </div>
+            </div>`;
+        });
+        html += `</div>`;
+    });
+
+    html += `</div>`;
+    document.getElementById('crossMarket').innerHTML = html;
+}
+
+// ── Generate meeting repricing history (deterministic, cached per market+meetingIdx) ──
+// Simulates how OIS-implied expectations for a specific meeting evolved over the past 12 months.
+// Logic: further back in time, the implied rate tracks the then-prevailing spot rate more closely.
+function generateMeetingHistory(code, meetingIdx) {
+    const key = `${code}_m${meetingIdx}`;
+    if (cachedHistorical[key]) return cachedHistorical[key];
+
+    const m   = markets[code];
+    const fwd = cachedData[code];
+    if (!fwd?.[meetingIdx]) return [];
+
+    const currentImplied = fwd[meetingIdx].impliedRate;
+    const N   = 12; // months of history
+    const now = new Date();
+    const result = [];
+
+    for (let i = N; i >= 0; i--) {
+        const d    = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1));
+        const t    = i / 12; // years back
+
+        // Estimated spot rate at that time (reverse-extrapolate from current using drift)
+        // When real implied rates are available, use their trend instead of drift
+        const _effectiveDrift = m.impliedRates
+            ? ((m.impliedRates[m.impliedRates.length - 1] - m.rate) / Math.max(m.impliedRates.length - 1, 1))
+            : (m.drift || 0);
+        const spotThen = m.rate - _effectiveDrift * t * 1.35;
+
+        // Market's implied rate for this meeting tracks the spot rate but with forward premium
+        // alpha: how much forward pricing co-moves with spot (higher = tighter tracking)
+        const alpha = 0.72;
+        const base  = currentImplied + (spotThen - m.rate) * alpha;
+
+        // Deterministic pseudo-noise — stable across page refreshes, varies by market + meeting + month
+        const h1    = code.charCodeAt(0) * 37;
+        const h2    = (code.charCodeAt(1) || 0) * 19;
+        const noiseMag = 0.07 + t * 0.14; // more dispersion the further back
+        const noise = ((((h1 ^ (h2 + meetingIdx * 11 + i * 7)) & 0xff) / 255) - 0.5) * noiseMag;
+
+        const rate  = parseFloat(Math.max(0, base + noise).toFixed(3));
+        const mo    = d.getUTCMonth();
+        const yr    = d.getUTCFullYear();
+        result.push({
+            ts:      d.getTime(),
+            label:   `${MON_ARR[mo]} ${yr}`,
+            xLabel:  mo === 0 ? `${MON_ARR[mo]}'${String(yr).slice(2)}` : MON_ARR[mo],
+            rate,
+            isNow:   i === 0,
+        });
+    }
+
+    cachedHistorical[key] = result;
+    return result;
+}
+
+// ── Meeting toggle pills ──
+function renderMeetingToggles(code) {
+    const fwd = cachedData[code];
+    if (!fwd?.length) return;
+    const row = document.getElementById('meetingToggleRow');
+    if (!row) return;
+
+    row.innerHTML = fwd.map((d, i) => {
+        const p    = d.meeting.split(' ');
+        const lbl  = `${p[0]} ${p[1]}`; // e.g. "29 Apr"
+        const yr   = p[2];
+        const isNext = i === 0;
+        return `<button class="mtg-btn${i === currentMeetingIdx ? ' active' : ''}"
+                    onclick="selectMeeting(${i})"
+                    title="${d.meeting}">
+                    ${isNext ? '<span style="font-size:.55rem;font-weight:700;letter-spacing:.06em;opacity:.7;margin-right:2px;">NEXT</span> ' : ''}${lbl} <span style="font-size:.55rem;opacity:.55;">${yr}</span>
+                </button>`;
+    }).join('');
+}
+
+// ── Select a meeting to view history for ──
+function selectMeeting(idx) {
+    currentMeetingIdx = idx;
+    // Update toggle active state
+    document.querySelectorAll('.mtg-btn').forEach((btn, i) => {
+        btn.classList.toggle('active', i === idx);
+    });
+    renderMeetingHistoryChart(currentMarket, idx);
+}
+
+// ── Meeting repricing history chart ──
+function renderMeetingHistoryChart(code, meetingIdx) {
+    const m    = markets[code];
+    const fwd  = cachedData[code];
+    const hist = generateMeetingHistory(code, meetingIdx);
+    if (!hist?.length || !fwd?.[meetingIdx]) return;
+
+    const svg  = document.getElementById('historyChart');
+    if (!svg) return;
+
+    const meeting        = fwd[meetingIdx];
+    const currentImplied = meeting.impliedRate;
+    const twelveMAgo     = hist[0].rate;
+    const bpsChange      = parseFloat(((currentImplied - twelveMAgo) * 100).toFixed(1));
+    const lineColor      = bpsChange <= -5 ? 'var(--red)' : bpsChange >= 5 ? 'var(--green)' : 'var(--amber)';
+
+    // Update legend swatch
+    const leg = document.getElementById('histLineLegend');
+    if (leg) leg.style.background = lineColor;
+
+    // Chart title
+    const chgSign = bpsChange >= 0 ? '+' : '';
+    document.getElementById('histChartTitle').textContent =
+        `${m.abbr}  ·  ${meeting.meeting}  ·  Current implied: ${currentImplied.toFixed(3)}%`;
+
+    // Repricing stat badge
+    const statEl = document.getElementById('histRepriceStat');
+    if (statEl) {
+        const dir    = bpsChange <= -5 ? 'Dovish repricing' : bpsChange >= 5 ? 'Hawkish repricing' : 'Stable';
+        const col    = bpsChange <= -5 ? 'var(--red)' : bpsChange >= 5 ? 'var(--green)' : 'var(--text-mid)';
+        statEl.innerHTML = `<div style="font-size:.62rem;color:var(--text-dim);">12-month change</div>
+            <div style="font-size:1rem;font-weight:700;color:${col};">${chgSign}${bpsChange}<span style="font-size:.62rem;font-weight:400;"> bps</span></div>
+            <div style="font-size:.58rem;color:${col};">${dir}</div>`;
+    }
+
+    // ── SVG layout ──
+    const W  = Math.max(svg.parentElement.clientWidth - 44, 300);
+    const H  = 185, PAD = {t:18, r:20, b:42, l:54};
+    const cw = W - PAD.l - PAD.r;
+    const ch = H - PAD.t - PAD.b;
+
+    const allR  = hist.map(d => d.rate);
+    const _rMin = Math.min(...allR, m.rate), _rMax = Math.max(...allR, m.rate);
+    const _rng  = _rMax - _rMin || 0.01;
+    const _step = _rng <= 0.12 ? 0.05 : _rng <= 0.30 ? 0.10 : _rng <= 0.75 ? 0.25 : _rng <= 1.50 ? 0.50 : 1.00;
+    const _S    = 1e6;
+    const minR  = Math.floor(Math.round(_rMin * _S) / _S / _step) * _step;
+    const maxR  = Math.ceil(Math.round(_rMax * _S) / _S / _step) * _step;
+
+    const minTs = hist[0].ts, maxTs = hist[hist.length - 1].ts;
+    const xS    = ts => PAD.l + ((ts - minTs) / Math.max(maxTs - minTs, 1)) * cw;
+    const yS    = v  => PAD.t + ch - ((v - minR) / Math.max(maxR - minR, 0.01)) * ch;
+
+    // ── Grid ──
+    let g = '';
+    for (let v = minR; v <= maxR + _step * 0.001; v = Math.round((v + _step) * _S) / _S) {
+        const y = yS(v);
+        g += `<line x1="${PAD.l}" y1="${y}" x2="${PAD.l+cw}" y2="${y}" stroke="var(--border-sub)" stroke-width="1"/>`;
+        g += `<text x="${PAD.l-6}" y="${y+4}" text-anchor="end" font-size="9" fill="var(--text-dim)" font-family="JetBrains Mono,monospace">${v.toFixed(2)}%</text>`;
+    }
+
+    // Current spot rate reference line
+    const spotY = yS(m.rate);
+    g += `<line x1="${PAD.l}" y1="${spotY}" x2="${PAD.l+cw}" y2="${spotY}" stroke="var(--text-dim)" stroke-width="1" stroke-dasharray="4,3"/>`;
+    g += `<text x="${PAD.l+cw+3}" y="${spotY+4}" font-size="8" fill="var(--text-dim)" font-family="JetBrains Mono,monospace">spot</text>`;
+
+    // ── Path & area ──
+    let path = `M ${xS(hist[0].ts)} ${yS(hist[0].rate)}`;
+    let area = `M ${PAD.l} ${H-PAD.b} L ${xS(hist[0].ts)} ${yS(hist[0].rate)}`;
+    hist.forEach((d, i) => {
+        if (i === 0) return;
+        path += ` L ${xS(d.ts)} ${yS(d.rate)}`;
+        area += ` L ${xS(d.ts)} ${yS(d.rate)}`;
+    });
+    area += ` L ${PAD.l+cw} ${H-PAD.b} Z`;
+
+    // Gradient area fill based on direction
+    const aFill = bpsChange <= -5 ? 'rgba(185,28,28,0.07)' : bpsChange >= 5 ? 'rgba(21,128,61,0.07)' : 'rgba(180,83,9,0.07)';
+
+    // ── Dots ──
+    let dots = '';
+    hist.forEach(d => {
+        const r    = d.isNow ? 5 : 2.8;
+        const fill = d.isNow ? lineColor : 'var(--text-dim)';
+        const sw   = d.isNow ? 1.8 : 1;
+        dots += `<circle cx="${xS(d.ts)}" cy="${yS(d.rate)}" r="${r}" fill="${fill}" stroke="var(--panel)" stroke-width="${sw}"/>`;
+    });
+    // Highlight oldest point
+    dots += `<circle cx="${xS(hist[0].ts)}" cy="${yS(hist[0].rate)}" r="3.5" fill="var(--text-mid)" stroke="var(--panel)" stroke-width="1.5"/>`;
+
+    // ── X-axis labels ──
+    let xlbl = '';
+    hist.forEach((d, i) => {
+        if (i % 2 !== 0 && !d.isNow) return; // every other month
+        const fill = d.isNow ? lineColor : 'var(--text-dim)';
+        const txt  = d.isNow ? 'Now' : d.xLabel;
+        xlbl += `<text x="${xS(d.ts)}" y="${H-PAD.b+14}" text-anchor="middle" font-size="8.5" fill="${fill}" font-family="JetBrains Mono,monospace">${txt}</text>`;
+    });
+
+    // "12M ago" label at left
+    xlbl += `<text x="${PAD.l}" y="${H-PAD.b+26}" text-anchor="start" font-size="7.5" fill="var(--text-dim)" font-family="JetBrains Mono,monospace">← 12M ago</text>`;
+    xlbl += `<text x="${PAD.l+cw}" y="${H-PAD.b+26}" text-anchor="end" font-size="7.5" fill="${lineColor}" font-family="JetBrains Mono,monospace">Today →</text>`;
+
+    svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+    svg.innerHTML =
+        g +
+        `<path d="${area}" fill="${aFill}"/>` +
+        `<path d="${path}" fill="none" stroke="${lineColor}" stroke-width="2.2" stroke-linejoin="round"/>` +
+        dots + xlbl;
+}
+
+// ── Master render ──
+function renderAll(code, flash = false) {
+    renderSummary(code);
+    renderTable(code, flash);
+    renderChart(code);
+    renderMeetingToggles(code);
+    renderMeetingHistoryChart(code, currentMeetingIdx);
+    renderCrossMarket();
+}
+
+// ── Tab switch ──
+function switchTab(code) {
+    currentMarket     = code;
+    currentMeetingIdx = 0; // reset to first meeting on market change
+    ALL_CODES.forEach(c => {
+        const b = document.getElementById(`tab-${c}`);
+        if (b) b.classList.toggle('active', c === code);
+    });
+    cachedData[code] = generateData(code);
+    renderAll(code, false);
+}
+
+// ── Tooltip ──
+function showTip(e, text) {
+    const t = document.getElementById('tooltip');
+    t.innerHTML = text.replace('\\n','<br>');
+    t.style.display = 'block';
+    t.style.left = (e.pageX + 14) + 'px';
+    t.style.top  = (e.pageY - 12) + 'px';
+}
+function hideTip() { document.getElementById('tooltip').style.display = 'none'; }
+
+// ── Tab source dots ──
+function injectTabDots() {
+    ALL_CODES.forEach(code => {
+        const btn = document.getElementById(`tab-${code}`);
+        if (!btn) return;
+        const m = markets[code];
+        const color = m.live === true ? 'var(--green)' : 'var(--amber)';
+        const dot = document.createElement('span');
+        dot.className = 'tab-src-dot';
+        dot.style.background = color;
+        dot.title = m.live === true ? 'Live-scraped data' : 'Hardcoded schedule';
+        btn.appendChild(dot);
+    });
+}
+
+
+// ── Init ──
+function init() {
+    ALL_CODES.forEach(c => { cachedData[c] = generateData(c); });
+    const ts = document.getElementById('dataTimestamp');
+    if (ts && typeof LAST_UPDATED !== 'undefined') ts.textContent = LAST_UPDATED;
+    updateClock();
+    setInterval(updateClock, 1000);
+    setInterval(tickCountdown, 1000);
+    injectTabDots();
+    switchTab('US');
+    window.addEventListener('resize', () => { renderChart(currentMarket); renderMeetingHistoryChart(currentMarket, currentMeetingIdx); });
+}
+
+init();
+</script>
+</body>
+</html>
