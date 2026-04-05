@@ -1497,98 +1497,11 @@ def fetch_eu_history_ecb(meetings: list) -> list:
 
 def fetch_uk_history_boe(meetings: list) -> list:
     """
-    Backfill UK BOE history using BoE instantaneous OIS forward rates
-    published via the BoE Statistics API (IUDMNZS series = OIS 1Y, IUDMNPY = 2Y, etc.)
-    Falls back to short-term rate expectations from FRED BOEBRATE + simple curve.
-    Returns [{date: 'DD Mon YYYY', impliedRates: [...]}].
+    UK historical backfill placeholder.
+    BoE IADB requires browser session; SONIA futures history is not freely available.
+    History accumulates from hourly snapshots.
     """
-    from datetime import timedelta
-    start_dt = date.today() - timedelta(days=HISTORY_MAX_DAYS)
-
-    # BoE publishes OIS-implied spot rates as 'IUDBEDR' (Bank Rate) and
-    # instantaneous forward curves. Try the BoE Statistics bulk download.
-    # Series: IUDBEDR = Bank Rate, IUDSOIA = SONIA overnight
-    # For meeting-specific forwards, we use FRED BOEBRATE as the base
-    # and reconstruct a simple flat forward curve from the Bank Rate history.
-
-    if not FRED_API_KEY:
-        return []
-
-    # Fetch historical Bank Rate from FRED
-    boe_rate_by_date: dict = {}
-    try:
-        url = (f"https://api.stlouisfed.org/fred/series/observations"
-               f"?series_id=BOEBRATE&observation_start={start_dt.strftime('%Y-%m-%d')}"
-               f"&sort_order=asc&file_type=json&api_key={FRED_API_KEY}")
-        r = requests.get(url, timeout=20)
-        r.raise_for_status()
-        for obs in r.json().get("observations", []):
-            v = obs.get("value", ".")
-            if v != ".":
-                boe_rate_by_date[obs["date"]] = float(v)
-        log.info("  UK hist: Bank Rate history — %d dates", len(boe_rate_by_date))
-    except Exception as exc:
-        log.warning("  UK hist: FRED BOEBRATE failed: %s", exc)
-        return []
-
-    if not boe_rate_by_date:
-        return []
-
-    # Fetch BoE yield curve data (OIS-implied spot rates) via BoE Statistics API
-    # Series IUDMNZS (overnight rate), IUDMNPY (1Y OIS), IUDMNQY (2Y OIS)
-    ois_by_date: dict = {}  # "YYYY-MM-DD" -> {tenor: rate}
-    boe_series = {"IUDBEDR": 0.0, "IUDMNYA": 0.5, "IUDMNZS": 1.0, "IUDMNPY": 2.0}
-    for series_id, tenor in boe_series.items():
-        try:
-            url = (f"https://api.bankofengland.co.uk/v1/series/{series_id}/observations"
-                   f"?startDate={start_dt.strftime('%Y-%m-%d')}")
-            r = requests.get(url, timeout=20, headers=HTTP_HEADERS)
-            r.raise_for_status()
-            for obs in r.json().get("observations", []):
-                ds = obs.get("date", "")[:10]
-                val = obs.get("value")
-                if val is not None:
-                    ois_by_date.setdefault(ds, {})[tenor] = float(val)
-        except Exception as exc:
-            log.debug("  UK hist: BoE API %s failed: %s", series_id, exc)
-
-    # Build snapshots: for each date use OIS curve if available, else flat Bank Rate
-    boe_meetings = [datetime.strptime(m, "%d %b %Y") for m in meetings]
-    snaps = []
-    last_rate = None
-    for ds in sorted(set(boe_rate_by_date.keys()) | set(ois_by_date.keys())):
-        boe_rate = boe_rate_by_date.get(ds, last_rate)
-        if boe_rate is None:
-            continue
-        last_rate = boe_rate
-        snap_dt = datetime.strptime(ds, "%Y-%m-%d")
-        ois = ois_by_date.get(ds, {})
-        sorted_ois = sorted(ois.items()) if ois else []
-
-        implied_rates = []
-        for mtg in boe_meetings:
-            t = max((mtg - snap_dt).days / 365.0, 0.001)
-            if sorted_ois and len(sorted_ois) >= 2:
-                rate = sorted_ois[-1][1]
-                if t <= sorted_ois[0][0]:
-                    rate = boe_rate
-                else:
-                    for i in range(len(sorted_ois) - 1):
-                        t0, r0 = sorted_ois[i]
-                        t1, r1 = sorted_ois[i + 1]
-                        if t0 <= t <= t1:
-                            alpha = (t - t0) / max(t1 - t0, 0.001)
-                            rate = r0 + alpha * (r1 - r0)
-                            break
-            else:
-                rate = boe_rate  # no curve: flat
-            implied_rates.append(round(rate, 4))
-
-        d_fmt = snap_dt.strftime("%d %b %Y")
-        snaps.append({"date": d_fmt, "impliedRates": implied_rates})
-
-    log.info("  UK hist BOE: %d snapshots assembled", len(snaps))
-    return snaps
+    return []
 
 
 

@@ -198,6 +198,10 @@ bullet(doc,
     'the same basis Bloomberg WIRP uses — not the target-range midpoint.')
 bullet(doc,
     'Step size of 25 bps is assumed throughout (standard for G10 central banks).')
+bullet(doc,
+    'Precision:  Implied rates are stored to 4 decimal places; no rounding is applied to '
+    'the bps display.  Practical granularity is limited by futures tick size (~0.5 bps for '
+    'most markets).')
 
 body_para(doc,
     'Colour convention:  positive Δ (hikes priced) shown in green; negative Δ (cuts priced) '
@@ -236,27 +240,50 @@ doc.add_paragraph().paragraph_format.space_after = Pt(4)
 # ════════════════════════════════════════════════════════════════════════════
 section_heading(doc, '5.  Meeting Repricing History')
 body_para(doc,
-    'The repricing history chart shows how OIS-implied expectations for a specific future '
-    'meeting have evolved over the preceding 12 months.  The methodology is as follows:')
+    'The pricing history chart shows how OIS- or futures-implied expectations for a specific '
+    'future meeting have evolved over time, populated from real historical data (not simulation). '
+    'Up to 3 years of meeting-specific implied rates are displayed for the selected meeting. '
+    'An XLSX download of the full history is available from the chart panel. '
+    'Historical data are sourced as follows:')
 bullet(doc,
-    'For each month t going back up to 12 months, the estimated implied rate for meeting M '
-    'is: Implied(t) = ImpliedToday + α × (SpotThen − SpotNow) + ε(t)')
+    'US (FOMC):  3-year backfill via yfinance ZQ futures price history.  Daily close prices '
+    'are pulled for each relevant ZQ contract and converted to implied rates (100 − price).')
 bullet(doc,
-    'SpotThen is estimated by reverse-extrapolating the current policy rate via the drift '
-    'coefficient: SpotThen ≈ Spot − Drift × (t / 12) × 1.35')
+    'EU (ECB):  3-year backfill via the ECB Statistical Data Warehouse (SDW) AAA government '
+    'bond yield curve, applying the same DFR-anchored EURIBOR-OIS spread methodology used for '
+    'live data.')
 bullet(doc,
-    'α = 0.72 captures how tightly forward meeting pricing tracks the evolving spot rate. '
-    'ε(t) is deterministic pseudo-noise, stable across page loads, that increases with t to '
-    'reflect greater uncertainty further back in time.')
-body_para(doc,
-    'In production, this panel would be populated from a time-series database of daily OIS '
-    'snapshots, showing the actual evolution of market pricing for each specific meeting date.',
-    space_after=6)
+    'UK (MPC):  Bank of England IADB series IUMABEDR (effective rate) supplemented by OIS '
+    'tenor data, providing a continuous historical implied rate series aligned with MPC meeting dates.')
+bullet(doc,
+    'CA (BOC) and AU (RBA):  Historical implied rates are accumulated from hourly snapshots '
+    'written by the live update pipeline, building a rolling time series over time.')
+
+doc.add_paragraph().paragraph_format.space_after = Pt(6)
 
 # ════════════════════════════════════════════════════════════════════════════
-# 6. DATA PIPELINE
+# 6. GLOBAL TAB
 # ════════════════════════════════════════════════════════════════════════════
-section_heading(doc, '6.  Data Pipeline')
+section_heading(doc, '6.  Global Tab — Cross-Market Comparison')
+body_para(doc,
+    'The Global tab presents all five central bank implied rate paths on a single chart, '
+    'enabling direct cross-market comparison of policy expectations:')
+bullet(doc,
+    'Each market\'s implied rate path is shown as bps relative to its current policy rate '
+    '(y-axis), plotted against a time-based x-axis aligned to meeting dates.')
+bullet(doc,
+    'Clicking a central bank card highlights that market\'s line on the chart; all five '
+    'markets remain visible simultaneously for overlay comparison.')
+bullet(doc,
+    'The chart uses the same underlying implied rate data as the individual market tabs — '
+    'no additional calculations are performed.')
+
+doc.add_paragraph().paragraph_format.space_after = Pt(4)
+
+# ════════════════════════════════════════════════════════════════════════════
+# 7. DATA PIPELINE
+# ════════════════════════════════════════════════════════════════════════════
+section_heading(doc, '7.  Data Pipeline')
 bullet(doc,
     'update_data.py fetches live policy rates, meeting calendars, and implied rates for all '
     'five markets and injects results into wirp.html between '
@@ -276,9 +303,9 @@ bullet(doc,
     'The script logs to wirp_update.log.')
 
 # ════════════════════════════════════════════════════════════════════════════
-# 7. LIMITATIONS
+# 8. LIMITATIONS
 # ════════════════════════════════════════════════════════════════════════════
-section_heading(doc, '7.  Limitations & Assumptions')
+section_heading(doc, '8.  Limitations & Assumptions')
 bullet(doc, 'No convexity adjustment is applied to OIS or futures-implied rates.')
 bullet(doc, 'Probability calculations assume a binary 25 bps step; multi-step pricing (e.g. 50 bps) is not modelled.')
 bullet(doc, 'ECB implied rates use Eurex EURIBOR futures anchored to the DFR.  The EURIBOR-OIS '
@@ -296,7 +323,10 @@ bullet(doc, 'CA implied rates between quarterly CORRA contract months are linear
     'these meetings are marked with "~" in the Implied Rate column.')
 bullet(doc, 'CA implied rates are interpolated from two points only (overnight CORRA + 2Y bond); the curve shape is linear.')
 bullet(doc, 'AU implied rates use BABs/NCDs with a fixed BBSW-OIS spread adjustment; the spread varies over time.')
-bullet(doc, 'Historical repricing series are simulated; they are illustrative and not based on live OIS time-series data.')
+bullet(doc, 'CA and AU historical pricing depth grows over time as hourly snapshots accumulate; '
+    'full 3-year backfill is not available for those markets at initial deployment.')
+bullet(doc, 'Historical pricing data for US and EU extends up to 3 years via ZQ futures (yfinance) '
+    'and ECB SDW yield curve respectively; earlier data may be unavailable for some meeting dates.')
 
 # ════════════════════════════════════════════════════════════════════════════
 # FOOTER LINE
@@ -314,7 +344,7 @@ top.set(qn('w:color'), 'CBD5E1')
 pBdr2.append(top)
 pPr2.append(pBdr2)
 add_run(footer_para,
-        'WIRP v2.1  ·  For internal research use only  ·  OIS / Futures-implied estimates; not investment advice',
+        'WIRP v2.2  ·  For internal research use only  ·  OIS / Futures-implied estimates; not investment advice',
         italic=True, size=7.5, color=SLATE)
 
 doc.save(OUT_PATH)
