@@ -21,7 +21,7 @@ sudo apt-get install -y -q nginx python3 python3-pip python3-venv
 echo "[2/6] Setting up Python virtualenv..."
 python3 -m venv "$WIRP_DIR/venv"
 "$WIRP_DIR/venv/bin/pip" install --quiet --upgrade pip
-"$WIRP_DIR/venv/bin/pip" install --quiet requests beautifulsoup4 python-docx openpyxl yfinance
+"$WIRP_DIR/venv/bin/pip" install --quiet requests beautifulsoup4 python-docx openpyxl yfinance websocket-client
 
 # ── 3. Web root ───────────────────────────────────────────────────────────────
 echo "[3/6] Setting up web root..."
