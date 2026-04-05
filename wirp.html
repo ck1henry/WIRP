@@ -7,6 +7,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
     <style>
         :root {
             --bg:         #f0f4f8;
@@ -132,20 +133,21 @@
         <div id="utcClock" style="text-align:right;">
             <div id="utcTime" style="font-size:1.4rem;font-weight:700;letter-spacing:0.04em;line-height:1;color:var(--amber);">00:00:00</div>
             <div id="utcDate" style="font-size:0.62rem;color:var(--text-mid);margin-top:2px;"></div>
+            <div style="font-size:0.52rem;color:var(--text-dim);margin-top:1px;letter-spacing:.06em;">LONDON</div>
         </div>
     </div>
 </div>
 
 <!-- ══════════════ MARKET NAV ══════════════ -->
 <div style="background:var(--panel);border-left:1px solid var(--border);border-right:1px solid var(--border);border-bottom:1px solid var(--border-sub);padding:0 22px;display:flex;align-items:stretch;overflow-x:auto;">
-    <button class="tab-btn active" id="tab-US" onclick="switchTab('US')">US <span style="opacity:.5;font-size:.8em;">(Fed)</span></button>
-    <button class="tab-btn"        id="tab-CA" onclick="switchTab('CA')">CA <span style="opacity:.5;font-size:.8em;">(BOC)</span></button>
-    <button class="tab-btn"        id="tab-EU" onclick="switchTab('EU')">EU <span style="opacity:.5;font-size:.8em;">(ECB)</span></button>
-    <button class="tab-btn"        id="tab-UK" onclick="switchTab('UK')">UK <span style="opacity:.5;font-size:.8em;">(BOE)</span></button>
-    <button class="tab-btn"        id="tab-AU" onclick="switchTab('AU')">AU <span style="opacity:.5;font-size:.8em;">(RBA)</span></button>
+    <button class="tab-btn active" id="tab-US"     onclick="switchTab('US')">US <span style="opacity:.5;font-size:.8em;">(Fed)</span></button>
+    <button class="tab-btn"        id="tab-EU"     onclick="switchTab('EU')">EU <span style="opacity:.5;font-size:.8em;">(ECB)</span></button>
+    <button class="tab-btn"        id="tab-UK"     onclick="switchTab('UK')">UK <span style="opacity:.5;font-size:.8em;">(BOE)</span></button>
+    <button class="tab-btn"        id="tab-CA"     onclick="switchTab('CA')">CA <span style="opacity:.5;font-size:.8em;">(BOC)</span></button>
+    <button class="tab-btn"        id="tab-AU"     onclick="switchTab('AU')">AU <span style="opacity:.5;font-size:.8em;">(RBA)</span></button>
+    <button class="tab-btn"        id="tab-GLOBAL" onclick="switchTab('GLOBAL')" style="margin-left:10px;">Global</button>
     <div style="flex:1;border-bottom:1px solid var(--border-sub);min-width:10px;"></div>
     <div style="display:flex;align-items:center;gap:10px;padding:0 0 0 12px;border-bottom:1px solid var(--border-sub);">
-        <span id="stanceBadge"></span>
         <span id="daysUntil" style="font-size:0.62rem;color:var(--text-dim);white-space:nowrap;"></span>
     </div>
 </div>
@@ -163,11 +165,11 @@
             <span style="display:inline-block;width:20px;border-top:2px dashed var(--text-dim);vertical-align:middle;margin-right:4px;"></span>Current Rate
         </span>
     </div>
-    <svg id="rateChart" width="100%" height="150" style="overflow:visible;"></svg>
+    <svg id="rateChart" width="100%" height="160" style="overflow:visible;"></svg>
 </div>
 
 <!-- ══════════════ TABLE HEADER ══════════════ -->
-<div style="background:var(--panel);border-left:1px solid var(--border);border-right:1px solid var(--border);border-bottom:1px solid var(--border);">
+<div id="tableHeader" style="background:var(--panel);border-left:1px solid var(--border);border-right:1px solid var(--border);border-bottom:1px solid var(--border);">
     <div class="data-row" style="padding-top:6px;padding-bottom:6px;border-bottom:none;">
         <div style="font-size:0.58rem;color:var(--text-dim);letter-spacing:0.1em;text-transform:uppercase;">#&nbsp;&nbsp;Meeting Date</div>
         <div style="font-size:0.58rem;color:var(--text-dim);letter-spacing:0.1em;text-transform:uppercase;text-align:right;">Implied Rate</div>
@@ -182,27 +184,18 @@
 <div id="totalsRow" style="border-left:1px solid var(--border);border-right:1px solid var(--border);border-bottom:1px solid var(--border);"></div>
 
 <!-- ══════════════ MEETING REPRICING HISTORY ══════════════ -->
-<div id="historyChartArea" style="background:var(--panel);border-left:1px solid var(--border);border-right:1px solid var(--border);border-bottom:1px solid var(--border-sub);padding:14px 22px 12px;">
-    <!-- Header row -->
-    <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px;">
+<div id="historyChartArea" style="background:var(--panel);border-left:1px solid var(--border);border-right:1px solid var(--border);border-bottom:1px solid var(--border-sub);padding:14px 22px 14px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
         <div>
             <span style="font-size:0.72rem;font-weight:600;color:var(--text);">Market Pricing History</span>
-            <span style="font-size:0.6rem;color:var(--text-dim);margin-left:10px;">How OIS-implied expectations for a specific meeting have evolved over the past 12 months</span>
+            <span style="font-size:0.6rem;color:var(--text-dim);margin-left:10px;">Historical futures-implied rate path — up to 3 years</span>
         </div>
-        <div id="histRepriceStat" style="text-align:right;"></div>
+        <button id="xlsxBtn" onclick="downloadHistoryXLSX()" style="padding:5px 11px;font-size:0.6rem;font-weight:600;cursor:pointer;border:1px solid var(--border);border-radius:4px;background:var(--panel-alt);color:var(--text-mid);white-space:nowrap;letter-spacing:.04em;display:none;">⬇ XLSX</button>
     </div>
     <!-- Meeting selector -->
     <div id="meetingToggleRow"></div>
-    <!-- Chart title line -->
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:6px;">
-        <span id="histChartTitle" style="font-size:0.62rem;color:var(--text-mid);"></span>
-        <span style="display:flex;align-items:center;gap:14px;font-size:0.6rem;color:var(--text-mid);">
-            <span style="display:inline-flex;align-items:center;gap:4px;"><span id="histLineLegend" style="display:inline-block;width:18px;height:2px;background:var(--amber);vertical-align:middle;"></span>Implied rate for meeting</span>
-            <span style="display:inline-flex;align-items:center;gap:4px;"><span style="display:inline-block;width:18px;border-top:1.5px dashed var(--text-dim);vertical-align:middle;"></span>Current spot rate</span>
-        </span>
-    </div>
-    <svg id="historyChart" width="100%" height="185" style="overflow:visible;"></svg>
-    <div style="font-size:0.55rem;color:var(--text-dim);margin-top:6px;font-style:italic;">Simulated historical OIS-implied pricing. In production, feed from a time-series database of daily OIS snapshots.</div>
+    <!-- Chart area — populated only if real snapshot data exists -->
+    <div id="historyChartContent"></div>
 </div>
 
 <!-- ══════════════ CROSS-MARKET OVERVIEW ══════════════ -->
@@ -211,11 +204,11 @@
 <!-- ══════════════ FOOTER ══════════════ -->
 <div style="background:var(--panel);border:1px solid var(--border);border-top:none;padding:9px 22px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
     <span style="font-size:0.57rem;color:var(--text-dim);">
-        OIS / futures-implied rates. US: CME FF futures · EU: ECB YC · UK: SONIA OIS · CA: BOC CORRA · AU: RBA BABs. Updated daily at 07:00 UTC.
+        Futures-implied rates. US: CME ZQ · EU: Eurex EURIBOR FEU3 · UK: ICE SONIA SO3 · CA: TMX CORRA CRA · AU: ASX IB. Updated hourly.
     </span>
     <div style="display:flex;gap:14px;align-items:center;">
         <span style="font-size:0.57rem;"><span style="color:var(--green);">▲ Hike</span>&nbsp;&nbsp;<span style="color:var(--red);">▼ Cut</span>&nbsp;&nbsp;<span style="color:var(--amber);">━ Hold</span></span>
-        <span style="font-size:0.57rem;color:var(--text-dim);">WIRP v2.0 │ 2026</span>
+        <span style="font-size:0.57rem;color:var(--text-dim);">WIRP v2.2 │ 2026</span>
     </div>
 </div>
 
@@ -238,6 +231,7 @@ const ALL_CODES  = Object.keys(markets);
 const REGION_MAP = Object.fromEntries(ALL_CODES.map(c => [c, markets[c].region]));
 
 let currentMarket    = 'US';
+let isGlobalView     = false;
 let cachedData       = {};
 let cachedHistorical = {};
 let currentMeetingIdx= 0;
@@ -265,19 +259,37 @@ function getStance(bps) {
     return               {label:'Neutral',     cls:'stance-neutral'};
 }
 
-// ── Clock ──
+// ── Clock (UK / London time) ──
 function updateClock() {
-    const n = new Date(), p = v => String(v).padStart(2,'0');
-    document.getElementById('utcTime').textContent = `${p(n.getUTCHours())}:${p(n.getUTCMinutes())}:${p(n.getUTCSeconds())}`;
-    const D=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'], M=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-    document.getElementById('utcDate').textContent = `${D[n.getUTCDay()]} ${p(n.getUTCDate())} ${M[n.getUTCMonth()]} ${n.getUTCFullYear()} UTC`;
+    const now = new Date();
+    const ukParts = new Intl.DateTimeFormat('en-GB', {
+        timeZone: 'Europe/London',
+        hour: '2-digit', minute: '2-digit', second: '2-digit',
+        hour12: false
+    }).formatToParts(now);
+    const ukDateParts = new Intl.DateTimeFormat('en-GB', {
+        timeZone: 'Europe/London',
+        weekday: 'short', day: '2-digit', month: 'short', year: 'numeric'
+    }).formatToParts(now);
+    const get = (parts, type) => (parts.find(p => p.type === type) || {}).value || '';
+    const hh = get(ukParts, 'hour'), mm = get(ukParts, 'minute'), ss = get(ukParts, 'second');
+    document.getElementById('utcTime').textContent = `${hh}:${mm}:${ss}`;
+    // Determine timezone abbreviation
+    const tzAbbr = now.toLocaleString('en-GB', {timeZone:'Europe/London', timeZoneName:'short'}).split(' ').pop();
+    const wd = get(ukDateParts,'weekday'), d = get(ukDateParts,'day'), mo = get(ukDateParts,'month'), yr = get(ukDateParts,'year');
+    document.getElementById('utcDate').textContent = `${wd} ${d} ${mo} ${yr} ${tzAbbr}`;
 }
 
 function tickCountdown() {
     if (--countdown <= 0) {
         countdown = 5;
-        cachedData[currentMarket] = generateData(currentMarket);
-        renderAll(currentMarket, true);
+        if (isGlobalView) {
+            ALL_CODES.forEach(c => { cachedData[c] = generateData(c); });
+            renderCrossMarket();
+        } else {
+            cachedData[currentMarket] = generateData(currentMarket);
+            renderAll(currentMarket, true);
+        }
     }
     const el = document.getElementById('refreshCountdown');
     if (el) el.textContent = `REF: ${countdown}s`;
@@ -299,7 +311,7 @@ function generateData(code) {
         return {
             meeting,
             impliedRate:      parseFloat(implied.toFixed(3)),
-            impliedChangeBps: parseFloat(bps.toFixed(1)),
+            impliedChangeBps: bps,
             hikeProb:         parseFloat((change > 0 ? Math.min((change / 0.25) * 100, 100) : 0).toFixed(1)),
             cutProb:          parseFloat((change < 0 ? Math.min((Math.abs(change) / 0.25) * 100, 100) : 0).toFixed(1)),
             isInterp:         !!(m.impliedRatesInterp && m.impliedRatesInterp[i]),
@@ -311,11 +323,8 @@ function generateData(code) {
 function renderSummary(code) {
     const m = markets[code], data = cachedData[code];
     const last = data[data.length - 1];
-    const totalBps = parseFloat(((last.impliedRate - m.rate) * 100).toFixed(1));
+    const totalBps = (last.impliedRate - m.rate) * 100;
     const chgColor = totalBps > 0 ? 'var(--green)' : totalBps < 0 ? 'var(--red)' : 'var(--amber)';
-    const cumBps   = parseFloat(data.reduce((s,d) => s + d.impliedChangeBps, 0).toFixed(1));
-    const cutsN    = data.filter(d => d.cutProb  > 60).length;
-    const hikesN   = data.filter(d => d.hikeProb > 60).length;
 
     const isLive = m.live === true;
     const srcText = m.source || (isLive ? 'Live web scrape' : 'Hardcoded schedule');
@@ -324,19 +333,12 @@ function renderSummary(code) {
 
     document.getElementById('summaryStrip').innerHTML = `
         <div class="strip-item"><div class="strip-label">Central Bank</div><div class="strip-value" style="font-size:.76rem;">${m.name}</div></div>
-        <div class="strip-item"><div class="strip-label">Committee</div><div class="strip-value">${m.abbr}</div></div>
-        <div class="strip-item"><div class="strip-label">Region</div><div class="strip-value" style="font-size:.76rem;color:var(--text-mid);">${m.region}</div></div>
         <div class="strip-item"><div class="strip-label">Current Rate</div><div class="strip-value">${m.rate.toFixed(3)}<span style="font-size:.68rem;color:var(--text-mid);">%</span></div></div>
-        <div class="strip-item"><div class="strip-label">Priced 12M Change</div><div class="strip-value" style="color:${chgColor};">${totalBps >= 0 ? '+' : ''}${totalBps}<span style="font-size:.68rem;"> bps</span></div></div>
-        <div class="strip-item"><div class="strip-label">Implied Rate (1Y)</div><div class="strip-value">${last.impliedRate.toFixed(3)}<span style="font-size:.68rem;color:var(--text-mid);">%</span></div></div>
-        <div class="strip-item"><div class="strip-label">Cum. Implied Chg</div><div class="strip-value" style="color:${cumBps >= 0 ? 'var(--green)' : 'var(--red)'};">${cumBps >= 0 ? '+' : ''}${cumBps}<span style="font-size:.68rem;"> bps</span></div></div>
-        <div class="strip-item"><div class="strip-label">Cuts &gt;60%</div><div class="strip-value" style="color:${cutsN ? 'var(--red)' : 'var(--amber)'};">${cutsN}</div></div>
-        <div class="strip-item"><div class="strip-label">Hikes &gt;60%</div><div class="strip-value" style="color:${hikesN ? 'var(--green)' : 'var(--amber)'};">${hikesN}</div></div>
+        <div class="strip-item"><div class="strip-label">Priced End Change</div><div class="strip-value" style="color:${chgColor};">${totalBps >= 0 ? '+' : ''}${+totalBps.toFixed(4)}<span style="font-size:.68rem;"> bps</span></div></div>
+        <div class="strip-item"><div class="strip-label">Implied Rate (end)</div><div class="strip-value">${last.impliedRate.toFixed(3)}<span style="font-size:.68rem;color:var(--text-mid);">%</span></div></div>
         <div class="strip-item" style="border-right:none;margin-right:0;"><div class="strip-label">Data Source</div><div style="display:flex;align-items:center;gap:5px;margin-top:1px;"><span style="width:7px;height:7px;border-radius:50%;background:${srcColor};display:inline-block;flex-shrink:0;"></span><span style="font-size:.65rem;font-weight:600;color:${srcColor};">${srcLabel}</span><span style="font-size:.58rem;color:var(--text-mid);max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${srcText}">${srcText}</span></div></div>`;
 
-    const stance = getStance(totalBps);
-    const days   = daysUntilMeeting(code);
-    document.getElementById('stanceBadge').innerHTML = `<span class="stance-badge ${stance.cls}">${stance.label}</span>`;
+    const days = daysUntilMeeting(code);
     document.getElementById('daysUntil').textContent = days !== null ? `Next meeting: ${days}d` : '';
 }
 
@@ -345,7 +347,7 @@ function renderChart(code) {
     const m = markets[code], data = cachedData[code];
     const svg = document.getElementById('rateChart');
     const W   = Math.max(svg.parentElement.clientWidth - 44, 300);
-    const H = 150, PAD = {t:10, r:18, b:34, l:52};
+    const H = 160, PAD = {t:10, r:18, b:34, l:52};
     const n = data.length;
     const rates = data.map(d => d.impliedRate);
     const allR  = [m.rate, ...rates];
@@ -356,8 +358,15 @@ function renderChart(code) {
     const minR  = Math.floor(Math.round(_rMin * _S) / _S / _step) * _step;
     const maxR  = Math.ceil(Math.round(_rMax * _S) / _S / _step) * _step;
     const cw = W - PAD.l - PAD.r, ch = H - PAD.t - PAD.b;
-    const xS = i => PAD.l + (n > 1 ? (i / (n-1)) * cw : cw/2);
-    const yS = v => PAD.t + ch - ((v - minR) / Math.max(maxR - minR, 0.01)) * ch;
+
+    // Time-based x-axis: today → last meeting
+    const todayTs = (() => { const d = new Date(); d.setUTCHours(0,0,0,0); return d.getTime(); })();
+    const mtgTs   = data.map(d => parseMeetingDate(d.meeting).getTime());
+    const minTs   = todayTs;
+    const maxTs   = mtgTs[n - 1];
+    const xS  = ts => PAD.l + ((ts - minTs) / Math.max(maxTs - minTs, 1)) * cw;
+    const xSi = i  => xS(mtgTs[i]);
+    const yS  = v  => PAD.t + ch - ((v - minR) / Math.max(maxR - minR, 0.01)) * ch;
 
     const _netChg = data[data.length - 1].impliedRate - m.rate;
     const lc  = _netChg < -0.05 ? 'var(--red)' : _netChg > 0.05 ? 'var(--green)' : 'var(--amber)';
@@ -365,8 +374,7 @@ function renderChart(code) {
 
     const sw = document.getElementById('chartLegendLine');
     if (sw) sw.style.background = lc;
-    const _src = 'Futures / OIS';
-    document.getElementById('chartTitle').textContent = `${m.name}  ·  Implied Rate Path  ·  ${_src}`;
+    document.getElementById('chartTitle').textContent = `${m.name}  ·  Implied Rate Path  ·  Futures / OIS`;
 
     let grid = '';
     for (let v = minR; v <= maxR + _step * 0.001; v = Math.round((v + _step) * _S) / _S) {
@@ -377,18 +385,27 @@ function renderChart(code) {
     const bY = yS(m.rate);
     grid += `<line x1="${PAD.l}" y1="${bY}" x2="${PAD.l+cw}" y2="${bY}" stroke="var(--text-dim)" stroke-width="1" stroke-dasharray="4,3"/>`;
 
-    let area = `M ${xS(0)} ${yS(rates[0])}`, line = area;
-    for (let i = 1; i < n; i++) { area += ` L ${xS(i)} ${yS(rates[i])}`; line += ` L ${xS(i)} ${yS(rates[i])}`; }
-    area += ` L ${xS(n-1)} ${H-PAD.b} L ${xS(0)} ${H-PAD.b} Z`;
+    // Today vertical marker
+    const todayX = PAD.l; // today is always the left edge
+    grid += `<line x1="${todayX}" y1="${PAD.t}" x2="${todayX}" y2="${H-PAD.b}" stroke="var(--amber)" stroke-width="1" stroke-dasharray="3,3" opacity="0.6"/>`;
+    grid += `<text x="${todayX}" y="${H-PAD.b+14}" text-anchor="middle" font-size="8.5" fill="var(--amber)" font-family="JetBrains Mono,monospace" font-weight="600">Today</text>`;
+    // Today dot at current rate
+    grid += `<circle cx="${todayX}" cy="${bY}" r="4" fill="var(--amber)" stroke="var(--panel)" stroke-width="1.5"/>`;
+
+    let area = `M ${xSi(0)} ${yS(rates[0])}`, line = area;
+    for (let i = 1; i < n; i++) { area += ` L ${xSi(i)} ${yS(rates[i])}`; line += ` L ${xSi(i)} ${yS(rates[i])}`; }
+    area += ` L ${xSi(n-1)} ${H-PAD.b} L ${xSi(0)} ${H-PAD.b} Z`;
 
     let dots = '';
     data.forEach((d, i) => {
-        const cx = xS(i), cy = yS(d.impliedRate);
-        const cs = (d.impliedChangeBps >= 0 ? '+' : '') + d.impliedChangeBps.toFixed(1) + ' bps';
+        const cx = xSi(i), cy = yS(d.impliedRate);
+        const cs = (d.impliedChangeBps >= 0 ? '+' : '') + (+d.impliedChangeBps.toFixed(4)) + ' bps';
         dots += `<circle cx="${cx}" cy="${cy}" r="3.5" fill="${lc}" stroke="var(--panel-alt)" stroke-width="1.5"/>`;
         dots += `<circle cx="${cx}" cy="${cy}" r="12" fill="transparent" onmouseenter="showTip(event,'${d.meeting}\\n${d.impliedRate.toFixed(3)}% (${cs})')" onmouseleave="hideTip()"/>`;
-        if (n <= 8 || i % 2 === 0) {
-            const lbl = d.meeting.replace(/ \d{4}.*/,'');
+        const lbl = d.meeting.replace(/ \d{4}.*/,'');
+        // Label every dot but check for overlap with "Today" label
+        const tooClose = Math.abs(cx - todayX) < 22;
+        if (!tooClose) {
             dots += `<text x="${cx}" y="${H-PAD.b+14}" text-anchor="middle" font-size="8.5" fill="var(--text-dim)" font-family="JetBrains Mono,monospace">${lbl}</text>`;
         }
     });
@@ -415,119 +432,52 @@ function renderTable(code, flash = false) {
                 ${i === 0 ? '<span class="next-tag">NEXT</span>' : ''}
             </div>
             <div style="text-align:right;">${row.isInterp ? `<span style="font-size:.65rem;color:var(--text-dim);margin-right:1px;" title="Interpolated — no direct futures contract for this meeting">~</span>` : ''}<span style="font-size:.85rem;font-weight:600;color:var(--text);">${row.impliedRate.toFixed(3)}</span><span style="font-size:.61rem;color:var(--text-mid);">%</span></div>
-            <div style="text-align:right;"><span style="font-size:.85rem;font-weight:700;color:${chgColor};">${row.impliedChangeBps >= 0 ? '+' : ''}${row.impliedChangeBps.toFixed(1)}</span><span style="font-size:.58rem;color:var(--text-dim);"> bps</span></div>
+            <div style="text-align:right;"><span style="font-size:.85rem;font-weight:700;color:${chgColor};">${row.impliedChangeBps >= 0 ? '+' : ''}${+row.impliedChangeBps.toFixed(4)}</span><span style="font-size:.58rem;color:var(--text-dim);"> bps</span></div>
         </div>`;
     });
     document.getElementById('tableBody').innerHTML = html;
 
-    const tot = data.reduce((s,d) => s + d.impliedChangeBps, 0);
-    const tc  = tot > 0 ? 'var(--green)' : tot < 0 ? 'var(--red)' : 'var(--text-mid)';
-    document.getElementById('totalsRow').innerHTML = `
-        <div class="totals-row">
-            <div style="font-size:.6rem;color:var(--text-dim);letter-spacing:.09em;text-transform:uppercase;">Cumulative implied change</div>
-            <div></div>
-            <div style="text-align:right;"><span style="font-size:.85rem;font-weight:700;color:${tc};">${tot >= 0 ? '+' : ''}${tot.toFixed(1)}</span><span style="font-size:.58rem;color:var(--text-dim);"> bps</span></div>
-        </div>`;
+    document.getElementById('totalsRow').innerHTML = '';
 }
 
 // ── Cross-market global overview ──
 function renderCrossMarket() {
-    const regions = ['Americas','Europe','Asia-Pac'];
     let html = `<div style="background:var(--panel);border:1px solid var(--border);border-top:none;padding:14px 22px 16px;">
-        <div style="font-size:.58rem;color:var(--text-dim);letter-spacing:.1em;text-transform:uppercase;margin-bottom:10px;">
+        <div style="font-size:.58rem;color:var(--text-dim);letter-spacing:.1em;text-transform:uppercase;margin-bottom:12px;">
             Global Overview &nbsp;·&nbsp; 5 Central Banks &nbsp;·&nbsp; Click any card to switch
+        </div>
+        <div style="display:flex;gap:9px;flex-wrap:wrap;">`;
+
+    ['US','EU','UK','CA','AU'].forEach(code => {
+        const m = markets[code], data = cachedData[code];
+        if (!data || !data.length) return;
+        const last     = data[data.length - 1];
+        const totalBps = (last.impliedRate - m.rate) * 100;
+        const chgColor = totalBps < 0 ? 'var(--red)' : totalBps > 0 ? 'var(--green)' : 'var(--text-mid)';
+        const isActive = code === currentMarket;
+
+        html += `<div class="mkt-card ${isActive ? 'active-card' : ''}" onclick="switchTab('${code}')">
+            <div style="margin-bottom:6px;">
+                <div style="font-size:.57rem;color:var(--text-dim);letter-spacing:.09em;text-transform:uppercase;">${m.abbr}</div>
+                <div style="font-size:.7rem;color:var(--text);font-weight:600;margin-top:1px;">${code} — ${m.name}</div>
+            </div>
+            <div style="display:flex;gap:12px;">
+                <div>
+                    <div style="font-size:.53rem;color:var(--text-dim);letter-spacing:.09em;text-transform:uppercase;margin-bottom:1px;">Rate</div>
+                    <div style="font-size:.9rem;font-weight:700;color:var(--amber);">${m.rate.toFixed(2)}<span style="font-size:.58rem;font-weight:400;color:var(--text-mid);">%</span></div>
+                </div>
+                <div>
+                    <div style="font-size:.53rem;color:var(--text-dim);letter-spacing:.09em;text-transform:uppercase;margin-bottom:1px;">End Change</div>
+                    <div style="font-size:.9rem;font-weight:700;color:${chgColor};">${totalBps >= 0 ? '+' : ''}${+totalBps.toFixed(4)}<span style="font-size:.58rem;font-weight:400;"> bps</span></div>
+                </div>
+            </div>
         </div>`;
-
-    regions.forEach(region => {
-        html += `<div class="region-group-header">${region}</div><div style="display:flex;gap:9px;flex-wrap:wrap;margin-bottom:2px;">`;
-        ALL_CODES.filter(c => REGION_MAP[c] === region).forEach(code => {
-            const m = markets[code], data = cachedData[code];
-            if (!data || !data.length) return;
-            const last     = data[data.length - 1];
-            const totalBps = parseFloat(((last.impliedRate - m.rate) * 100).toFixed(1));
-            const chgColor = totalBps < 0 ? 'var(--red)' : totalBps > 0 ? 'var(--green)' : 'var(--text-mid)';
-            const stance   = getStance(totalBps);
-            const isActive = code === currentMarket;
-
-            html += `<div class="mkt-card ${isActive ? 'active-card' : ''}" onclick="switchTab('${code}')">
-                <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px;">
-                    <div>
-                        <div style="font-size:.57rem;color:var(--text-dim);letter-spacing:.09em;text-transform:uppercase;">${m.abbr}</div>
-                        <div style="font-size:.7rem;color:var(--text);font-weight:600;margin-top:1px;">${code}</div>
-                    </div>
-                    <span class="stance-badge ${stance.cls}" style="font-size:.5rem;">${stance.label}</span>
-                </div>
-                <div style="display:flex;gap:12px;">
-                    <div>
-                        <div style="font-size:.53rem;color:var(--text-dim);letter-spacing:.09em;text-transform:uppercase;margin-bottom:1px;">Rate</div>
-                        <div style="font-size:.9rem;font-weight:700;color:var(--amber);">${m.rate.toFixed(2)}<span style="font-size:.58rem;font-weight:400;color:var(--text-mid);">%</span></div>
-                    </div>
-                    <div>
-                        <div style="font-size:.53rem;color:var(--text-dim);letter-spacing:.09em;text-transform:uppercase;margin-bottom:1px;">12M Chg</div>
-                        <div style="font-size:.9rem;font-weight:700;color:${chgColor};">${totalBps >= 0 ? '+' : ''}${totalBps}<span style="font-size:.58rem;font-weight:400;"> bps</span></div>
-                    </div>
-                </div>
-            </div>`;
-        });
-        html += `</div>`;
     });
 
-    html += `</div>`;
-    document.getElementById('crossMarket').innerHTML = html;
-}
-
-// ── Generate meeting repricing history (deterministic, cached per market+meetingIdx) ──
-// Simulates how OIS-implied expectations for a specific meeting evolved over the past 12 months.
-// Logic: further back in time, the implied rate tracks the then-prevailing spot rate more closely.
-function generateMeetingHistory(code, meetingIdx) {
-    const key = `${code}_m${meetingIdx}`;
-    if (cachedHistorical[key]) return cachedHistorical[key];
-
-    const m   = markets[code];
-    const fwd = cachedData[code];
-    if (!fwd?.[meetingIdx]) return [];
-
-    const currentImplied = fwd[meetingIdx].impliedRate;
-    const N   = 12; // months of history
-    const now = new Date();
-    const result = [];
-
-    for (let i = N; i >= 0; i--) {
-        const d    = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1));
-        const t    = i / 12; // years back
-
-        // Estimated spot rate at that time (reverse-extrapolate from current using drift)
-        // When real implied rates are available, use their trend instead of drift
-        const _effectiveDrift = m.impliedRates
-            ? ((m.impliedRates[m.impliedRates.length - 1] - m.rate) / Math.max(m.impliedRates.length - 1, 1))
-            : (m.drift || 0);
-        const spotThen = m.rate - _effectiveDrift * t * 1.35;
-
-        // Market's implied rate for this meeting tracks the spot rate but with forward premium
-        // alpha: how much forward pricing co-moves with spot (higher = tighter tracking)
-        const alpha = 0.72;
-        const base  = currentImplied + (spotThen - m.rate) * alpha;
-
-        // Deterministic pseudo-noise — stable across page refreshes, varies by market + meeting + month
-        const h1    = code.charCodeAt(0) * 37;
-        const h2    = (code.charCodeAt(1) || 0) * 19;
-        const noiseMag = 0.07 + t * 0.14; // more dispersion the further back
-        const noise = ((((h1 ^ (h2 + meetingIdx * 11 + i * 7)) & 0xff) / 255) - 0.5) * noiseMag;
-
-        const rate  = parseFloat(Math.max(0, base + noise).toFixed(3));
-        const mo    = d.getUTCMonth();
-        const yr    = d.getUTCFullYear();
-        result.push({
-            ts:      d.getTime(),
-            label:   `${MON_ARR[mo]} ${yr}`,
-            xLabel:  mo === 0 ? `${MON_ARR[mo]}'${String(yr).slice(2)}` : MON_ARR[mo],
-            rate,
-            isNow:   i === 0,
-        });
-    }
-
-    cachedHistorical[key] = result;
-    return result;
+    html += `</div></div>`;
+    const el = document.getElementById('crossMarket');
+    el.innerHTML = html;
+    el.style.display = '';
 }
 
 // ── Meeting toggle pills ──
@@ -553,7 +503,6 @@ function renderMeetingToggles(code) {
 // ── Select a meeting to view history for ──
 function selectMeeting(idx) {
     currentMeetingIdx = idx;
-    // Update toggle active state
     document.querySelectorAll('.mtg-btn').forEach((btn, i) => {
         btn.classList.toggle('active', i === idx);
     });
@@ -561,45 +510,44 @@ function selectMeeting(idx) {
 }
 
 // ── Meeting repricing history chart ──
+// Renders historical implied rates from markets[code].history snapshots.
+// Each snapshot: { date: "DD Mon YYYY", impliedRates: [r0, r1, ...] }
+// Populated by update_data.py appending daily snapshots (up to 3 years).
 function renderMeetingHistoryChart(code, meetingIdx) {
-    const m    = markets[code];
-    const fwd  = cachedData[code];
-    const hist = generateMeetingHistory(code, meetingIdx);
-    if (!hist?.length || !fwd?.[meetingIdx]) return;
+    const m   = markets[code];
+    const fwd = cachedData[code];
+    const el  = document.getElementById('historyChartContent');
+    const btn = document.getElementById('xlsxBtn');
+    if (!el || !fwd?.[meetingIdx]) return;
 
-    const svg  = document.getElementById('historyChart');
-    if (!svg) return;
+    const hist = (m.history || [])
+        .filter(snap => meetingIdx < (snap.impliedRates || []).length && snap.impliedRates[meetingIdx] != null)
+        .map(snap => ({
+            label: snap.date,
+            rate:  snap.impliedRates[meetingIdx],
+        }));
+
+    if (!hist.length) {
+        el.innerHTML = `<div style="padding:28px 0;text-align:center;font-size:0.65rem;color:var(--text-dim);">
+            No historical data yet — snapshots will accumulate as the dashboard runs hourly.
+        </div>`;
+        if (btn) btn.style.display = 'none';
+        return;
+    }
+
+    if (btn) btn.style.display = '';
 
     const meeting        = fwd[meetingIdx];
     const currentImplied = meeting.impliedRate;
-    const twelveMAgo     = hist[0].rate;
-    const bpsChange      = parseFloat(((currentImplied - twelveMAgo) * 100).toFixed(1));
+    const bpsChange      = (currentImplied - hist[0].rate) * 100;
     const lineColor      = bpsChange <= -5 ? 'var(--red)' : bpsChange >= 5 ? 'var(--green)' : 'var(--amber)';
 
-    // Update legend swatch
-    const leg = document.getElementById('histLineLegend');
-    if (leg) leg.style.background = lineColor;
-
-    // Chart title
-    const chgSign = bpsChange >= 0 ? '+' : '';
-    document.getElementById('histChartTitle').textContent =
-        `${m.abbr}  ·  ${meeting.meeting}  ·  Current implied: ${currentImplied.toFixed(3)}%`;
-
-    // Repricing stat badge
-    const statEl = document.getElementById('histRepriceStat');
-    if (statEl) {
-        const dir    = bpsChange <= -5 ? 'Dovish repricing' : bpsChange >= 5 ? 'Hawkish repricing' : 'Stable';
-        const col    = bpsChange <= -5 ? 'var(--red)' : bpsChange >= 5 ? 'var(--green)' : 'var(--text-mid)';
-        statEl.innerHTML = `<div style="font-size:.62rem;color:var(--text-dim);">12-month change</div>
-            <div style="font-size:1rem;font-weight:700;color:${col};">${chgSign}${bpsChange}<span style="font-size:.62rem;font-weight:400;"> bps</span></div>
-            <div style="font-size:.58rem;color:${col};">${dir}</div>`;
-    }
-
     // ── SVG layout ──
-    const W  = Math.max(svg.parentElement.clientWidth - 44, 300);
+    const W  = Math.max((el.parentElement?.clientWidth || 600) - 44, 300);
     const H  = 185, PAD = {t:18, r:20, b:42, l:54};
     const cw = W - PAD.l - PAD.r;
     const ch = H - PAD.t - PAD.b;
+    const n  = hist.length;
 
     const allR  = hist.map(d => d.rate);
     const _rMin = Math.min(...allR, m.rate), _rMax = Math.max(...allR, m.rate);
@@ -609,66 +557,55 @@ function renderMeetingHistoryChart(code, meetingIdx) {
     const minR  = Math.floor(Math.round(_rMin * _S) / _S / _step) * _step;
     const maxR  = Math.ceil(Math.round(_rMax * _S) / _S / _step) * _step;
 
-    const minTs = hist[0].ts, maxTs = hist[hist.length - 1].ts;
-    const xS    = ts => PAD.l + ((ts - minTs) / Math.max(maxTs - minTs, 1)) * cw;
-    const yS    = v  => PAD.t + ch - ((v - minR) / Math.max(maxR - minR, 0.01)) * ch;
+    const xS = i => PAD.l + (n > 1 ? (i / (n-1)) * cw : cw/2);
+    const yS = v => PAD.t + ch - ((v - minR) / Math.max(maxR - minR, 0.01)) * ch;
 
-    // ── Grid ──
     let g = '';
     for (let v = minR; v <= maxR + _step * 0.001; v = Math.round((v + _step) * _S) / _S) {
         const y = yS(v);
         g += `<line x1="${PAD.l}" y1="${y}" x2="${PAD.l+cw}" y2="${y}" stroke="var(--border-sub)" stroke-width="1"/>`;
         g += `<text x="${PAD.l-6}" y="${y+4}" text-anchor="end" font-size="9" fill="var(--text-dim)" font-family="JetBrains Mono,monospace">${v.toFixed(2)}%</text>`;
     }
-
-    // Current spot rate reference line
     const spotY = yS(m.rate);
     g += `<line x1="${PAD.l}" y1="${spotY}" x2="${PAD.l+cw}" y2="${spotY}" stroke="var(--text-dim)" stroke-width="1" stroke-dasharray="4,3"/>`;
-    g += `<text x="${PAD.l+cw+3}" y="${spotY+4}" font-size="8" fill="var(--text-dim)" font-family="JetBrains Mono,monospace">spot</text>`;
 
-    // ── Path & area ──
-    let path = `M ${xS(hist[0].ts)} ${yS(hist[0].rate)}`;
-    let area = `M ${PAD.l} ${H-PAD.b} L ${xS(hist[0].ts)} ${yS(hist[0].rate)}`;
-    hist.forEach((d, i) => {
-        if (i === 0) return;
-        path += ` L ${xS(d.ts)} ${yS(d.rate)}`;
-        area += ` L ${xS(d.ts)} ${yS(d.rate)}`;
-    });
+    let path = `M ${xS(0)} ${yS(hist[0].rate)}`;
+    let area = `M ${PAD.l} ${H-PAD.b} L ${xS(0)} ${yS(hist[0].rate)}`;
+    hist.forEach((d, i) => { if (i>0) { path += ` L ${xS(i)} ${yS(d.rate)}`; area += ` L ${xS(i)} ${yS(d.rate)}`; } });
     area += ` L ${PAD.l+cw} ${H-PAD.b} Z`;
 
-    // Gradient area fill based on direction
     const aFill = bpsChange <= -5 ? 'rgba(185,28,28,0.07)' : bpsChange >= 5 ? 'rgba(21,128,61,0.07)' : 'rgba(180,83,9,0.07)';
 
-    // ── Dots ──
     let dots = '';
-    hist.forEach(d => {
-        const r    = d.isNow ? 5 : 2.8;
-        const fill = d.isNow ? lineColor : 'var(--text-dim)';
-        const sw   = d.isNow ? 1.8 : 1;
-        dots += `<circle cx="${xS(d.ts)}" cy="${yS(d.rate)}" r="${r}" fill="${fill}" stroke="var(--panel)" stroke-width="${sw}"/>`;
-    });
-    // Highlight oldest point
-    dots += `<circle cx="${xS(hist[0].ts)}" cy="${yS(hist[0].rate)}" r="3.5" fill="var(--text-mid)" stroke="var(--panel)" stroke-width="1.5"/>`;
-
-    // ── X-axis labels ──
-    let xlbl = '';
     hist.forEach((d, i) => {
-        if (i % 2 !== 0 && !d.isNow) return; // every other month
-        const fill = d.isNow ? lineColor : 'var(--text-dim)';
-        const txt  = d.isNow ? 'Now' : d.xLabel;
-        xlbl += `<text x="${xS(d.ts)}" y="${H-PAD.b+14}" text-anchor="middle" font-size="8.5" fill="${fill}" font-family="JetBrains Mono,monospace">${txt}</text>`;
+        const isNow = i === n-1;
+        dots += `<circle cx="${xS(i)}" cy="${yS(d.rate)}" r="${isNow ? 5 : 2.5}" fill="${isNow ? lineColor : 'var(--text-dim)'}" stroke="var(--panel)" stroke-width="${isNow ? 1.8 : 1}"/>`;
     });
 
-    // "12M ago" label at left
-    xlbl += `<text x="${PAD.l}" y="${H-PAD.b+26}" text-anchor="start" font-size="7.5" fill="var(--text-dim)" font-family="JetBrains Mono,monospace">← 12M ago</text>`;
+    let xlbl = '';
+    const step = Math.max(1, Math.floor(n / 6));
+    hist.forEach((d, i) => {
+        if (i % step !== 0 && i !== n-1) return;
+        const fill = i === n-1 ? lineColor : 'var(--text-dim)';
+        xlbl += `<text x="${xS(i)}" y="${H-PAD.b+14}" text-anchor="middle" font-size="8.5" fill="${fill}" font-family="JetBrains Mono,monospace">${i === n-1 ? 'Now' : d.label}</text>`;
+    });
+    xlbl += `<text x="${PAD.l}" y="${H-PAD.b+26}" text-anchor="start" font-size="7.5" fill="var(--text-dim)" font-family="JetBrains Mono,monospace">← oldest</text>`;
     xlbl += `<text x="${PAD.l+cw}" y="${H-PAD.b+26}" text-anchor="end" font-size="7.5" fill="${lineColor}" font-family="JetBrains Mono,monospace">Today →</text>`;
 
-    svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
-    svg.innerHTML =
-        g +
-        `<path d="${area}" fill="${aFill}"/>` +
-        `<path d="${path}" fill="none" stroke="${lineColor}" stroke-width="2.2" stroke-linejoin="round"/>` +
-        dots + xlbl;
+    el.innerHTML = `
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:6px;">
+            <span style="font-size:0.62rem;color:var(--text-mid);">${m.abbr} · ${meeting.meeting} · Current implied: ${currentImplied.toFixed(3)}%</span>
+            <span style="display:flex;align-items:center;gap:14px;font-size:0.6rem;color:var(--text-mid);">
+                <span style="display:inline-flex;align-items:center;gap:4px;"><span style="display:inline-block;width:18px;height:2px;background:${lineColor};vertical-align:middle;"></span>Implied rate</span>
+                <span style="display:inline-flex;align-items:center;gap:4px;"><span style="display:inline-block;width:18px;border-top:1.5px dashed var(--text-dim);vertical-align:middle;"></span>Spot rate</span>
+            </span>
+        </div>
+        <svg width="100%" height="185" viewBox="0 0 ${W} ${H}" style="overflow:visible;">
+            ${g}
+            <path d="${area}" fill="${aFill}"/>
+            <path d="${path}" fill="none" stroke="${lineColor}" stroke-width="2.2" stroke-linejoin="round"/>
+            ${dots}${xlbl}
+        </svg>`;
 }
 
 // ── Master render ──
@@ -678,18 +615,44 @@ function renderAll(code, flash = false) {
     renderChart(code);
     renderMeetingToggles(code);
     renderMeetingHistoryChart(code, currentMeetingIdx);
-    renderCrossMarket();
+    // crossMarket is only shown in GLOBAL tab, hide it when viewing a market
+    const cm = document.getElementById('crossMarket');
+    if (cm) cm.style.display = 'none';
+}
+
+// ── Show / hide market detail sections ──
+const MARKET_SECTION_IDS = ['summaryStrip','chartArea','tableHeader','tableBody','totalsRow','historyChartArea'];
+function setMarketSectionsVisible(visible) {
+    const d = visible ? '' : 'none';
+    MARKET_SECTION_IDS.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.style.display = d;
+    });
 }
 
 // ── Tab switch ──
 function switchTab(code) {
-    currentMarket     = code;
-    currentMeetingIdx = 0; // reset to first meeting on market change
-    ALL_CODES.forEach(c => {
+    const isGlobal = code === 'GLOBAL';
+    // Update tab active states (market tabs + GLOBAL tab)
+    [...ALL_CODES, 'GLOBAL'].forEach(c => {
         const b = document.getElementById(`tab-${c}`);
         if (b) b.classList.toggle('active', c === code);
     });
-    cachedData[code] = generateData(code);
+
+    if (isGlobal) {
+        isGlobalView = true;
+        setMarketSectionsVisible(false);
+        ALL_CODES.forEach(c => { if (!cachedData[c]?.length) cachedData[c] = generateData(c); });
+        renderCrossMarket();
+        document.getElementById('daysUntil').textContent = '';
+        return;
+    }
+
+    isGlobalView      = false;
+    setMarketSectionsVisible(true);
+    currentMarket     = code;
+    currentMeetingIdx = 0;
+    cachedData[code]  = generateData(code);
     renderAll(code, false);
 }
 
@@ -718,6 +681,37 @@ function injectTabDots() {
     });
 }
 
+
+// ── XLSX download (real snapshot data only) ──
+function downloadHistoryXLSX() {
+    const m   = markets[currentMarket];
+    const fwd = cachedData[currentMarket];
+    const snaps = m.history || [];
+    if (!fwd?.length || !snaps.length) return;
+
+    const wb = typeof XLSX !== 'undefined' ? XLSX.utils.book_new() : null;
+    if (!wb) { alert('SheetJS not loaded'); return; }
+
+    fwd.forEach((meeting, idx) => {
+        const hist = snaps
+            .filter(s => idx < (s.impliedRates||[]).length && s.impliedRates[idx] != null)
+            .map(s => [s.date, s.impliedRates[idx], (s.impliedRates[idx] - m.rate) * 100]);
+        if (!hist.length) return;
+        const rows = [
+            [`Market: ${currentMarket} — ${m.name}`],
+            [`Meeting: ${meeting.meeting}`],
+            [`Base rate: ${m.rate.toFixed(3)}%`],
+            [],
+            ['Date', 'Implied Rate (%)', 'Change from base (bps)'],
+            ...hist
+        ];
+        const ws = XLSX.utils.aoa_to_sheet(rows);
+        ws['!cols'] = [{wch:14},{wch:18},{wch:22}];
+        XLSX.utils.book_append_sheet(wb, ws, meeting.meeting.replace(/ /g,'-').slice(0,31));
+    });
+
+    XLSX.writeFile(wb, `WIRP_${currentMarket}_pricing_history.xlsx`);
+}
 
 // ── Init ──
 function init() {
