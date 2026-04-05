@@ -1327,9 +1327,110 @@ def _trim_sort(snapshots: list) -> list:
     return kept
 
 
+def _tv_fetch_ohlcv(symbol: str, n_bars: int = 750) -> dict:
+    """
+    Fetch daily OHLCV history from TradingView WebSocket API.
+    Returns {date_str: close_price} e.g. {'23 Jan 2025': 96.095}
+    symbol format: 'CBOT:ZQM2026'
+    """
+    import websocket as _ws
+    import threading, string, random
+
+    result: dict = {}
+    done = threading.Event()
+    sess = 'cs_' + ''.join(random.choices(string.ascii_lowercase, k=12))
+
+    def _send(ws, func, args):
+        msg = json.dumps({'m': func, 'p': args})
+        ws.send(f'~m~{len(msg)}~m~{msg}')
+
+    def _on_msg(ws, message):
+        for part in message.split('~m~'):
+            if not part.startswith('{'):
+                continue
+            try:
+                d = json.loads(part)
+            except Exception:
+                continue
+            m = d.get('m', '')
+            if m == 'timescale_update':
+                bars = d.get('p', [{}])[1].get('s1', {}).get('s', [])
+                for b in bars:
+                    ts, _, _, _, close, _ = b['v']
+                    dt = datetime.utcfromtimestamp(ts).date()
+                    result[dt.strftime('%d %b %Y')] = round(100.0 - float(close), 4)
+                done.set()
+            elif m in ('symbol_error', 'series_error'):
+                log.warning('  TV hist: %s — %s', symbol, d.get('p', ''))
+                done.set()
+
+    def _on_open(ws):
+        _send(ws, 'set_auth_token', ['unauthorized_user_token'])
+        _send(ws, 'chart_create_session', [sess, ''])
+        _send(ws, 'switch_timezone', [sess, 'UTC'])
+        _send(ws, 'resolve_symbol', [sess, 'sds_sym_1', f'={{"symbol":"{symbol}"}}'])
+        _send(ws, 'create_series', [sess, 's1', 's1', 'sds_sym_1', 'D', n_bars, ''])
+
+    wsa = _ws.WebSocketApp(
+        'wss://data.tradingview.com/socket.io/websocket',
+        on_open=_on_open, on_message=_on_msg,
+        header={'Origin': 'https://www.tradingview.com'},
+    )
+    t = threading.Thread(target=wsa.run_forever, daemon=True)
+    t.start()
+    done.wait(timeout=20)
+    wsa.close()
+    return result
+
+
+def fetch_us_history_tradingview(meetings: list) -> list:
+    """
+    Backfill US pricing history via TradingView WebSocket (ZQ futures OHLCV).
+    Returns [{date: 'DD Mon YYYY', impliedRates: [r0, r1, ...]}, ...] sorted oldest→newest.
+    Falls back to yfinance if WebSocket fails.
+    """
+    by_date: dict = {}
+    any_success = False
+
+    for i, mtg_str in enumerate(meetings):
+        try:
+            mtg = datetime.strptime(mtg_str, "%d %b %Y")
+            post_month = mtg.month + 1
+            post_year = mtg.year
+            if post_month > 12:
+                post_month = 1
+                post_year += 1
+            mc = _FF_MONTH[post_month]
+            symbol = f"CBOT:ZQ{mc}{post_year}"
+            prices = _tv_fetch_ohlcv(symbol, n_bars=750)
+            if not prices:
+                log.warning("  US hist TV: no data for %s (%s)", symbol, mtg_str)
+                continue
+            any_success = True
+            for ds, implied in prices.items():
+                if ds not in by_date:
+                    by_date[ds] = [None] * len(meetings)
+                by_date[ds][i] = implied
+            log.info("  US hist TV: %d pts for %s (%s)", len(prices), symbol, mtg_str)
+        except Exception as exc:
+            log.warning("  US hist TV: failed for meeting %s: %s", mtg_str, exc)
+
+    if not any_success:
+        log.warning("  US hist TV: all contracts failed — falling back to yfinance")
+        return fetch_us_history_yfinance(meetings)
+
+    snaps = [
+        {"date": ds, "impliedRates": r}
+        for ds, r in sorted(by_date.items())
+        if any(v is not None for v in r)
+    ]
+    log.info("  US hist TradingView: %d daily snapshots assembled", len(snaps))
+    return snaps
+
+
 def fetch_us_history_yfinance(meetings: list) -> list:
     """
-    Backfill US pricing history via yfinance ZQ futures.
+    Fallback: backfill US pricing history via yfinance ZQ futures.
     Returns [{date: 'DD Mon YYYY', impliedRates: [r0, r1, ...]}, ...] sorted oldest→newest.
     """
     try:
@@ -1353,11 +1454,10 @@ def fetch_us_history_yfinance(meetings: list) -> list:
             mc = _FF_MONTH[post_month]
             ticker = f"ZQ{mc}{str(post_year)[2:]}.CBT"
             df = yf.download(ticker, start=start, progress=False, auto_adjust=True)
-            # yfinance may return MultiIndex columns; flatten
             if getattr(df.columns, 'nlevels', 1) > 1:
                 df.columns = df.columns.get_level_values(0)
             if df.empty:
-                log.warning("  US hist: no data for %s", ticker)
+                log.warning("  US hist yf: no data for %s", ticker)
                 continue
             for idx, row in df.iterrows():
                 d = idx.date() if hasattr(idx, "date") else idx
@@ -1368,9 +1468,9 @@ def fetch_us_history_yfinance(meetings: list) -> list:
                     by_date[ds][i] = round(100.0 - float(row["Close"]), 4)
                 except Exception:
                     pass
-            log.info("  US hist: %d pts for %s (%s)", len(df), ticker, mtg_str)
+            log.info("  US hist yf: %d pts for %s (%s)", len(df), ticker, mtg_str)
         except Exception as exc:
-            log.warning("  US hist: failed for meeting %s: %s", mtg_str, exc)
+            log.warning("  US hist yf: failed for meeting %s: %s", mtg_str, exc)
 
     snaps = [
         {"date": ds, "impliedRates": r}
@@ -1495,14 +1595,151 @@ def fetch_eu_history_ecb(meetings: list) -> list:
     return snaps
 
 
-def fetch_uk_history_boe(meetings: list) -> list:
+def _fetch_history_tv_aligned(meeting_syms: list, n_bars: int = 750) -> list:
     """
-    UK historical backfill placeholder.
-    BoE IADB requires browser session; SONIA futures history is not freely available.
-    History accumulates from hourly snapshots.
+    Generic TradingView history backfill helper.
+    meeting_syms: [(meeting_str, tv_symbol), ...]  — may have duplicate symbols.
+    Fetches each unique symbol, then assembles date-aligned snapshots.
+    Returns [{date, impliedRates}, ...] sorted oldest→newest.
     """
+    meetings = [m for m, _ in meeting_syms]
+    unique_syms = list(dict.fromkeys(s for _, s in meeting_syms))
+
+    # Fetch historical prices for each unique contract
+    sym_prices: dict = {}
+    any_ok = False
+    for sym in unique_syms:
+        prices = _tv_fetch_ohlcv(sym, n_bars=n_bars)
+        if prices:
+            sym_prices[sym] = prices
+            any_ok = True
+        else:
+            log.warning("  TV hist: no data for %s", sym)
+    if not any_ok:
+        return []
+
+    # Collect all dates across all fetched contracts
+    all_dates: set = set()
+    for p in sym_prices.values():
+        all_dates.update(p.keys())
+
+    by_date: dict = {ds: [None] * len(meetings) for ds in all_dates}
+
+    for i, (_, sym) in enumerate(meeting_syms):
+        if sym not in sym_prices:
+            continue
+        for ds, implied in sym_prices[sym].items():
+            by_date[ds][i] = implied
+
+    snaps = [
+        {"date": ds, "impliedRates": r}
+        for ds, r in sorted(by_date.items(), key=lambda x: _hist_sort_key(x[0]))
+        if any(v is not None for v in r)
+    ]
+    return snaps
+
+
+def fetch_eu_history_tradingview(meetings: list) -> list:
+    """
+    Backfill EU ECB history via TradingView (Eurex FEU3 EURIBOR 3M futures).
+    Falls back to ECB SDW yield curve approach.
+    """
+    meeting_syms = []
+    for mtg_str in meetings:
+        try:
+            mtg = datetime.strptime(mtg_str, "%d %b %Y")
+            sym = f"EUREX:FEU3{_EURIBOR_MONTH[mtg.month]}{mtg.year}"
+            meeting_syms.append((mtg_str, sym))
+        except Exception:
+            continue
+    snaps = _fetch_history_tv_aligned(meeting_syms)
+    if snaps:
+        log.info("  EU hist TradingView: %d snapshots assembled", len(snaps))
+        return snaps
+    log.warning("  EU hist TV: failed — falling back to ECB SDW")
+    return fetch_eu_history_ecb(meetings)
+
+
+def fetch_uk_history_tradingview(meetings: list) -> list:
+    """
+    Backfill UK BoE history via TradingView (ICE SONIA 3M futures, ICEEUR:SO3).
+    Uses meeting-month contract; 100-price = implied 3M SONIA.
+    """
+    meeting_syms = []
+    for mtg_str in meetings:
+        try:
+            mtg = datetime.strptime(mtg_str, "%d %b %Y")
+            sym = f"ICEEUR:SO3{_FF_MONTH[mtg.month]}{mtg.year}"
+            meeting_syms.append((mtg_str, sym))
+        except Exception:
+            continue
+    snaps = _fetch_history_tv_aligned(meeting_syms)
+    if snaps:
+        log.info("  UK hist TradingView: %d snapshots assembled", len(snaps))
+        return snaps
+    log.warning("  UK hist TV: no data")
     return []
 
+
+def fetch_ca_history_tradingview(meetings: list) -> list:
+    """
+    Backfill CA BoC history via TradingView (TMX CORRA 3M futures, quarterly).
+    Quarterly codes: H=Mar, M=Jun, U=Sep, Z=Dec.
+    Each meeting uses the next quarterly contract on or after the meeting month.
+    """
+    quarterly_codes = {3: 'H', 6: 'M', 9: 'U', 12: 'Z'}
+
+    def next_quarterly_sym(mtg: datetime) -> str:
+        yr, mo = mtg.year, mtg.month
+        for qm in sorted(quarterly_codes):
+            if qm >= mo:
+                return f"TMX:CRA{quarterly_codes[qm]}{yr}"
+        return f"TMX:CRA{quarterly_codes[3]}{yr + 1}"  # roll to next year Mar
+
+    meeting_syms = []
+    for mtg_str in meetings:
+        try:
+            mtg = datetime.strptime(mtg_str, "%d %b %Y")
+            meeting_syms.append((mtg_str, next_quarterly_sym(mtg)))
+        except Exception:
+            continue
+    snaps = _fetch_history_tv_aligned(meeting_syms)
+    if snaps:
+        log.info("  CA hist TradingView: %d snapshots assembled", len(snaps))
+        return snaps
+    log.warning("  CA hist TV: no data")
+    return []
+
+
+def fetch_au_history_tradingview(meetings: list) -> list:
+    """
+    Backfill AU RBA history via TradingView (ASX24 IB 30-day cash rate futures).
+    Uses post-month contract (same convention as ZQ).
+    """
+    meeting_syms = []
+    for mtg_str in meetings:
+        try:
+            mtg = datetime.strptime(mtg_str, "%d %b %Y")
+            post_month = mtg.month + 1
+            post_year = mtg.year
+            if post_month > 12:
+                post_month = 1
+                post_year += 1
+            sym = f"ASX24:IB{_FF_MONTH[post_month]}{post_year}"
+            meeting_syms.append((mtg_str, sym))
+        except Exception:
+            continue
+    snaps = _fetch_history_tv_aligned(meeting_syms)
+    if snaps:
+        log.info("  AU hist TradingView: %d snapshots assembled", len(snaps))
+        return snaps
+    log.warning("  AU hist TV: no data")
+    return []
+
+
+def fetch_uk_history_boe(meetings: list) -> list:
+    """Legacy placeholder — now superseded by fetch_uk_history_tradingview."""
+    return []
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1584,14 +1821,20 @@ def main() -> None:
         if len(history[code]) < 30:
             backfill = []
             if code == "US":
-                log.info("  US: sparse history — running yfinance backfill...")
-                backfill = fetch_us_history_yfinance(markets["US"]["meetings"])
+                log.info("  US: sparse history — running TradingView backfill...")
+                backfill = fetch_us_history_tradingview(markets["US"]["meetings"])
             elif code == "EU":
-                log.info("  EU: sparse history — running ECB SDW backfill...")
-                backfill = fetch_eu_history_ecb(markets["EU"]["meetings"])
+                log.info("  EU: sparse history — running TradingView backfill...")
+                backfill = fetch_eu_history_tradingview(markets["EU"]["meetings"])
             elif code == "UK":
-                log.info("  UK: sparse history — running BoE backfill...")
-                backfill = fetch_uk_history_boe(markets["UK"]["meetings"])
+                log.info("  UK: sparse history — running TradingView backfill...")
+                backfill = fetch_uk_history_tradingview(markets["UK"]["meetings"])
+            elif code == "CA":
+                log.info("  CA: sparse history — running TradingView backfill...")
+                backfill = fetch_ca_history_tradingview(markets["CA"]["meetings"])
+            elif code == "AU":
+                log.info("  AU: sparse history — running TradingView backfill...")
+                backfill = fetch_au_history_tradingview(markets["AU"]["meetings"])
             if backfill:
                 existing = {s["date"] for s in history[code]}
                 new_snaps = [s for s in backfill if s["date"] not in existing]
