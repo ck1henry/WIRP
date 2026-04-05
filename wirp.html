@@ -232,6 +232,7 @@ const REGION_MAP = Object.fromEntries(ALL_CODES.map(c => [c, markets[c].region])
 
 let currentMarket    = 'US';
 let isGlobalView     = false;
+let globalHighlight  = 'US';
 let cachedData       = {};
 let cachedHistorical = {};
 let currentMeetingIdx= 0;
@@ -310,7 +311,7 @@ function generateData(code) {
         const bps     = change * 100;
         return {
             meeting,
-            impliedRate:      parseFloat(implied.toFixed(3)),
+            impliedRate:      implied,
             impliedChangeBps: bps,
             hikeProb:         parseFloat((change > 0 ? Math.min((change / 0.25) * 100, 100) : 0).toFixed(1)),
             cutProb:          parseFloat((change < 0 ? Math.min((Math.abs(change) / 0.25) * 100, 100) : 0).toFixed(1)),
@@ -335,7 +336,7 @@ function renderSummary(code) {
         <div class="strip-item"><div class="strip-label">Central Bank</div><div class="strip-value" style="font-size:.76rem;">${m.name}</div></div>
         <div class="strip-item"><div class="strip-label">Current Rate</div><div class="strip-value">${m.rate.toFixed(3)}<span style="font-size:.68rem;color:var(--text-mid);">%</span></div></div>
         <div class="strip-item"><div class="strip-label">Priced End Change</div><div class="strip-value" style="color:${chgColor};">${totalBps >= 0 ? '+' : ''}${+totalBps.toFixed(4)}<span style="font-size:.68rem;"> bps</span></div></div>
-        <div class="strip-item"><div class="strip-label">Implied Rate (end)</div><div class="strip-value">${last.impliedRate.toFixed(3)}<span style="font-size:.68rem;color:var(--text-mid);">%</span></div></div>
+        <div class="strip-item"><div class="strip-label">Implied Rate (end)</div><div class="strip-value">${last.impliedRate.toFixed(4)}<span style="font-size:.68rem;color:var(--text-mid);">%</span></div></div>
         <div class="strip-item" style="border-right:none;margin-right:0;"><div class="strip-label">Data Source</div><div style="display:flex;align-items:center;gap:5px;margin-top:1px;"><span style="width:7px;height:7px;border-radius:50%;background:${srcColor};display:inline-block;flex-shrink:0;"></span><span style="font-size:.65rem;font-weight:600;color:${srcColor};">${srcLabel}</span><span style="font-size:.58rem;color:var(--text-mid);max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${srcText}">${srcText}</span></div></div>`;
 
     const days = daysUntilMeeting(code);
@@ -401,7 +402,7 @@ function renderChart(code) {
         const cx = xSi(i), cy = yS(d.impliedRate);
         const cs = (d.impliedChangeBps >= 0 ? '+' : '') + (+d.impliedChangeBps.toFixed(4)) + ' bps';
         dots += `<circle cx="${cx}" cy="${cy}" r="3.5" fill="${lc}" stroke="var(--panel-alt)" stroke-width="1.5"/>`;
-        dots += `<circle cx="${cx}" cy="${cy}" r="12" fill="transparent" onmouseenter="showTip(event,'${d.meeting}\\n${d.impliedRate.toFixed(3)}% (${cs})')" onmouseleave="hideTip()"/>`;
+        dots += `<circle cx="${cx}" cy="${cy}" r="12" fill="transparent" onmouseenter="showTip(event,'${d.meeting}\\n${d.impliedRate.toFixed(4)}% (${cs})')" onmouseleave="hideTip()"/>`;
         const lbl = d.meeting.replace(/ \d{4}.*/,'');
         // Label every dot but check for overlap with "Today" label
         const tooClose = Math.abs(cx - todayX) < 22;
@@ -431,7 +432,7 @@ function renderTable(code, flash = false) {
                 <span style="font-size:.82rem;color:var(--text);">${row.meeting}</span>
                 ${i === 0 ? '<span class="next-tag">NEXT</span>' : ''}
             </div>
-            <div style="text-align:right;">${row.isInterp ? `<span style="font-size:.65rem;color:var(--text-dim);margin-right:1px;" title="Interpolated — no direct futures contract for this meeting">~</span>` : ''}<span style="font-size:.85rem;font-weight:600;color:var(--text);">${row.impliedRate.toFixed(3)}</span><span style="font-size:.61rem;color:var(--text-mid);">%</span></div>
+            <div style="text-align:right;">${row.isInterp ? `<span style="font-size:.65rem;color:var(--text-dim);margin-right:1px;" title="Interpolated — no direct futures contract for this meeting">~</span>` : ''}<span style="font-size:.85rem;font-weight:600;color:var(--text);">${row.impliedRate.toFixed(4)}</span><span style="font-size:.61rem;color:var(--text-mid);">%</span></div>
             <div style="text-align:right;"><span style="font-size:.85rem;font-weight:700;color:${chgColor};">${row.impliedChangeBps >= 0 ? '+' : ''}${+row.impliedChangeBps.toFixed(4)}</span><span style="font-size:.58rem;color:var(--text-dim);"> bps</span></div>
         </div>`;
     });
@@ -440,12 +441,92 @@ function renderTable(code, flash = false) {
     document.getElementById('totalsRow').innerHTML = '';
 }
 
+// ── Global multi-market implied path chart ──
+const MARKET_COLORS = {US:'#d97706', EU:'#2563eb', UK:'#7c3aed', CA:'#dc2626', AU:'#16a34a'};
+
+function renderGlobalChart() {
+    const el = document.getElementById('globalChartArea');
+    if (!el) return;
+
+    const W  = Math.max(el.clientWidth - 4, 300);
+    const H  = 180, PAD = {t:14, r:20, b:36, l:52};
+    const cw = W - PAD.l - PAD.r, ch = H - PAD.t - PAD.b;
+
+    const todayTs = (() => { const d = new Date(); d.setUTCHours(0,0,0,0); return d.getTime(); })();
+
+    // Collect all data points: {code, ts, bps}
+    let allBps = [0], maxTs = todayTs;
+    const marketPoints = {};
+    ['US','EU','UK','CA','AU'].forEach(code => {
+        const data = cachedData[code];
+        if (!data?.length) return;
+        const pts = data.map(d => ({
+            ts:  parseMeetingDate(d.meeting).getTime(),
+            bps: d.impliedChangeBps,
+        }));
+        marketPoints[code] = pts;
+        pts.forEach(p => { allBps.push(p.bps); maxTs = Math.max(maxTs, p.ts); });
+    });
+
+    const _rMin = Math.min(...allBps), _rMax = Math.max(...allBps);
+    const _rng  = Math.max(_rMax - _rMin, 10);
+    const _step = _rng <= 20 ? 5 : _rng <= 50 ? 10 : _rng <= 150 ? 25 : 50;
+    const _S    = 1e6;
+    const minR  = Math.floor(Math.round(_rMin * _S) / _S / _step) * _step;
+    const maxR  = Math.ceil(Math.round(_rMax * _S) / _S / _step) * _step;
+
+    const xS = ts => PAD.l + ((ts - todayTs) / Math.max(maxTs - todayTs, 1)) * cw;
+    const yS = v  => PAD.t + ch - ((v - minR) / Math.max(maxR - minR, 0.01)) * ch;
+
+    // Grid
+    let g = '';
+    for (let v = minR; v <= maxR + _step * 0.001; v = Math.round((v + _step) * _S) / _S) {
+        const y = yS(v);
+        const isZero = Math.abs(v) < 0.01;
+        g += `<line x1="${PAD.l}" y1="${y}" x2="${PAD.l+cw}" y2="${y}" stroke="${isZero ? 'var(--border)' : 'var(--border-sub)'}" stroke-width="${isZero ? 1.5 : 1}"/>`;
+        g += `<text x="${PAD.l-5}" y="${y+4}" text-anchor="end" font-size="8.5" fill="var(--text-dim)" font-family="JetBrains Mono,monospace">${v >= 0 ? '+' : ''}${v}</text>`;
+    }
+    // Today line
+    g += `<line x1="${PAD.l}" y1="${PAD.t}" x2="${PAD.l}" y2="${H-PAD.b}" stroke="var(--amber)" stroke-width="1" stroke-dasharray="3,3" opacity="0.6"/>`;
+    g += `<text x="${PAD.l}" y="${H-PAD.b+14}" text-anchor="middle" font-size="8" fill="var(--amber)" font-family="JetBrains Mono,monospace">Today</text>`;
+
+    // Lines per market
+    let lines = '', labels = '';
+    ['US','EU','UK','CA','AU'].forEach(code => {
+        const pts = marketPoints[code];
+        if (!pts?.length) return;
+        const isHl = code === globalHighlight;
+        const color = MARKET_COLORS[code];
+        const opacity = isHl ? '1' : '0.25';
+        const sw = isHl ? '2.5' : '1.2';
+
+        let path = `M ${xS(pts[0].ts)} ${yS(pts[0].bps)}`;
+        pts.forEach((p, i) => { if (i > 0) path += ` L ${xS(p.ts)} ${yS(p.bps)}`; });
+
+        lines += `<path d="${path}" fill="none" stroke="${color}" stroke-width="${sw}" stroke-linejoin="round" opacity="${opacity}"/>`;
+
+        // Dots on highlighted market
+        if (isHl) {
+            pts.forEach(p => {
+                lines += `<circle cx="${xS(p.ts)}" cy="${yS(p.bps)}" r="3" fill="${color}" stroke="var(--panel)" stroke-width="1.5"/>`;
+            });
+        }
+
+        // Label at end of line
+        const last = pts[pts.length - 1];
+        labels += `<text x="${xS(last.ts) + 4}" y="${yS(last.bps) + 4}" font-size="8.5" fill="${color}" font-family="JetBrains Mono,monospace" opacity="${isHl ? '1' : '0.4'}" font-weight="${isHl ? '700' : '400'}">${code}</text>`;
+    });
+
+    el.innerHTML = `<svg width="100%" height="${H}" viewBox="0 0 ${W} ${H}" style="overflow:visible;">${g}${lines}${labels}</svg>`;
+}
+
 // ── Cross-market global overview ──
 function renderCrossMarket() {
     let html = `<div style="background:var(--panel);border:1px solid var(--border);border-top:none;padding:14px 22px 16px;">
-        <div style="font-size:.58rem;color:var(--text-dim);letter-spacing:.1em;text-transform:uppercase;margin-bottom:12px;">
-            Global Overview &nbsp;·&nbsp; 5 Central Banks &nbsp;·&nbsp; Click any card to switch
+        <div style="font-size:.58rem;color:var(--text-dim);letter-spacing:.1em;text-transform:uppercase;margin-bottom:10px;">
+            Global Overview &nbsp;·&nbsp; Implied Rate Change vs Current (bps) &nbsp;·&nbsp; Click a market to highlight
         </div>
+        <div id="globalChartArea" style="margin-bottom:14px;"></div>
         <div style="display:flex;gap:9px;flex-wrap:wrap;">`;
 
     ['US','EU','UK','CA','AU'].forEach(code => {
@@ -454,12 +535,16 @@ function renderCrossMarket() {
         const last     = data[data.length - 1];
         const totalBps = (last.impliedRate - m.rate) * 100;
         const chgColor = totalBps < 0 ? 'var(--red)' : totalBps > 0 ? 'var(--green)' : 'var(--text-mid)';
-        const isActive = code === currentMarket;
+        const isHl     = code === globalHighlight;
+        const dotColor = MARKET_COLORS[code];
 
-        html += `<div class="mkt-card ${isActive ? 'active-card' : ''}" onclick="switchTab('${code}')">
-            <div style="margin-bottom:6px;">
-                <div style="font-size:.57rem;color:var(--text-dim);letter-spacing:.09em;text-transform:uppercase;">${m.abbr}</div>
-                <div style="font-size:.7rem;color:var(--text);font-weight:600;margin-top:1px;">${code} — ${m.name}</div>
+        html += `<div class="mkt-card ${isHl ? 'active-card' : ''}" onclick="highlightGlobalMarket('${code}')" style="${isHl ? `border-color:${dotColor};box-shadow:0 0 0 1px ${dotColor};` : ''}">
+            <div style="margin-bottom:6px;display:flex;align-items:center;gap:6px;">
+                <span style="width:8px;height:8px;border-radius:50%;background:${dotColor};flex-shrink:0;display:inline-block;"></span>
+                <div>
+                    <div style="font-size:.57rem;color:var(--text-dim);letter-spacing:.09em;text-transform:uppercase;">${m.abbr}</div>
+                    <div style="font-size:.7rem;color:var(--text);font-weight:600;margin-top:1px;">${code} — ${m.name}</div>
+                </div>
             </div>
             <div style="display:flex;gap:12px;">
                 <div>
@@ -471,6 +556,7 @@ function renderCrossMarket() {
                     <div style="font-size:.9rem;font-weight:700;color:${chgColor};">${totalBps >= 0 ? '+' : ''}${+totalBps.toFixed(4)}<span style="font-size:.58rem;font-weight:400;"> bps</span></div>
                 </div>
             </div>
+            <div style="margin-top:6px;"><button onclick="event.stopPropagation();switchTab('${code}')" style="font-size:.55rem;padding:2px 7px;border:1px solid var(--border);border-radius:3px;background:var(--panel-alt);color:var(--text-mid);cursor:pointer;letter-spacing:.04em;">Details →</button></div>
         </div>`;
     });
 
@@ -478,6 +564,12 @@ function renderCrossMarket() {
     const el = document.getElementById('crossMarket');
     el.innerHTML = html;
     el.style.display = '';
+    renderGlobalChart();
+}
+
+function highlightGlobalMarket(code) {
+    globalHighlight = code;
+    renderCrossMarket();
 }
 
 // ── Meeting toggle pills ──
@@ -641,6 +733,7 @@ function switchTab(code) {
 
     if (isGlobal) {
         isGlobalView = true;
+        globalHighlight = currentMarket; // pre-highlight last viewed market
         setMarketSectionsVisible(false);
         ALL_CODES.forEach(c => { if (!cachedData[c]?.length) cachedData[c] = generateData(c); });
         renderCrossMarket();

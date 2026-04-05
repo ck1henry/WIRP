@@ -54,6 +54,8 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 HTML_FILE  = os.path.join(SCRIPT_DIR, "wirp.html")
 JSON_FILE  = os.path.join(SCRIPT_DIR, "wirp_data.json")
 LOG_FILE   = os.path.join(SCRIPT_DIR, "wirp_update.log")
+HISTORY_FILE = os.path.join(SCRIPT_DIR, "wirp_history.json")
+HISTORY_MAX_DAYS = 1095  # 3 years
 
 DATA_BEGIN = "<!-- WIRP_DATA_BEGIN -->"
 DATA_END   = "<!-- WIRP_DATA_END -->"
@@ -1286,6 +1288,311 @@ def fetch_all_data() -> tuple[dict, list[str]]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  HISTORY
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _hist_sort_key(date_str: str) -> str:
+    """Convert 'DD Mon YYYY' to 'YYYY-MM-DD' for sorting."""
+    try:
+        return datetime.strptime(date_str, "%d %b %Y").strftime("%Y-%m-%d")
+    except Exception:
+        return date_str
+
+
+def load_history() -> dict:
+    if os.path.exists(HISTORY_FILE):
+        try:
+            with open(HISTORY_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as exc:
+            log.warning("History load failed: %s", exc)
+    return {}
+
+
+def save_history(history: dict) -> None:
+    try:
+        with open(HISTORY_FILE, "w", encoding="utf-8") as f:
+            json.dump(history, f, separators=(",", ":"))
+        log.info("History saved -> %s", HISTORY_FILE)
+    except Exception as exc:
+        log.warning("History save failed: %s", exc)
+
+
+def _trim_sort(snapshots: list) -> list:
+    """Remove entries older than HISTORY_MAX_DAYS and sort ascending."""
+    from datetime import timedelta
+    cutoff = (date.today() - timedelta(days=HISTORY_MAX_DAYS)).strftime("%Y-%m-%d")
+    kept = [s for s in snapshots if _hist_sort_key(s.get("date", "")) >= cutoff]
+    kept.sort(key=lambda s: _hist_sort_key(s.get("date", "")))
+    return kept
+
+
+def fetch_us_history_yfinance(meetings: list) -> list:
+    """
+    Backfill US pricing history via yfinance ZQ futures.
+    Returns [{date: 'DD Mon YYYY', impliedRates: [r0, r1, ...]}, ...] sorted oldest→newest.
+    """
+    try:
+        import yfinance as yf
+    except ImportError:
+        log.warning("  US hist: yfinance not installed — run: pip install yfinance")
+        return []
+
+    from datetime import timedelta
+    start = (date.today() - timedelta(days=HISTORY_MAX_DAYS)).strftime("%Y-%m-%d")
+    by_date: dict = {}
+
+    for i, mtg_str in enumerate(meetings):
+        try:
+            mtg = datetime.strptime(mtg_str, "%d %b %Y")
+            post_month = mtg.month + 1
+            post_year = mtg.year
+            if post_month > 12:
+                post_month = 1
+                post_year += 1
+            mc = _FF_MONTH[post_month]
+            ticker = f"ZQ{mc}{str(post_year)[2:]}.CBT"
+            df = yf.download(ticker, start=start, progress=False, auto_adjust=True)
+            # yfinance may return MultiIndex columns; flatten
+            if getattr(df.columns, 'nlevels', 1) > 1:
+                df.columns = df.columns.get_level_values(0)
+            if df.empty:
+                log.warning("  US hist: no data for %s", ticker)
+                continue
+            for idx, row in df.iterrows():
+                d = idx.date() if hasattr(idx, "date") else idx
+                ds = d.strftime("%d %b %Y")
+                if ds not in by_date:
+                    by_date[ds] = [None] * len(meetings)
+                try:
+                    by_date[ds][i] = round(100.0 - float(row["Close"]), 4)
+                except Exception:
+                    pass
+            log.info("  US hist: %d pts for %s (%s)", len(df), ticker, mtg_str)
+        except Exception as exc:
+            log.warning("  US hist: failed for meeting %s: %s", mtg_str, exc)
+
+    snaps = [
+        {"date": ds, "impliedRates": r}
+        for ds, r in sorted(by_date.items())
+        if any(v is not None for v in r)
+    ]
+    log.info("  US hist yfinance: %d daily snapshots assembled", len(snaps))
+    return snaps
+
+
+def downsample_for_html(snapshots: list) -> list:
+    """
+    Reduce snapshot density for HTML injection to keep page size reasonable.
+    Keeps: all of last 90 days daily, then every 7th (weekly) before that.
+    """
+    from datetime import timedelta
+    cutoff_daily = (date.today() - timedelta(days=90)).strftime("%Y-%m-%d")
+    result = []
+    sparse_counter = 0
+    for s in snapshots:  # already sorted oldest→newest
+        key = _hist_sort_key(s.get("date", ""))
+        if key >= cutoff_daily:
+            result.append(s)
+        else:
+            if sparse_counter % 7 == 0:
+                result.append(s)
+            sparse_counter += 1
+    return result
+
+
+def fetch_eu_history_ecb(meetings: list) -> list:
+    """
+    Backfill EU ECB history using ECB SDW yield curve spot rates.
+    Fetches daily 3M/6M/1Y/2Y/3Y spot rates and ECB DFR, interpolates per meeting.
+    Returns [{date: 'DD Mon YYYY', impliedRates: [r0, r1, ...]}, ...].
+    """
+    from datetime import timedelta
+    start = (date.today() - timedelta(days=HISTORY_MAX_DAYS)).strftime("%Y-%m-%d")
+
+    # ── Fetch ECB DFR history ─────────────────────────────────────────────────
+    dfr_by_date: dict = {}
+    try:
+        url = (f"https://data-api.ecb.europa.eu/service/data/FM/B.U2.EUR.4F.KR.DFR.LEV"
+               f"?startPeriod={start}&format=jsondata")
+        r = requests.get(url, timeout=30, headers=HTTP_HEADERS)
+        r.raise_for_status()
+        data = r.json()
+        dim_vals = data["structure"]["dimensions"]["observation"][0]["values"]
+        obs = list(data["dataSets"][0]["series"].values())[0]["observations"]
+        for k, v in obs.items():
+            if v[0] is not None:
+                dfr_by_date[dim_vals[int(k)]["id"]] = float(v[0])
+        log.info("  EU hist: DFR history — %d dates", len(dfr_by_date))
+    except Exception as exc:
+        log.warning("  EU hist: DFR history failed: %s", exc)
+        return []
+
+    # ── Fetch yield curve spot rates at 5 tenors ──────────────────────────────
+    tenor_map = {"SR_3M": 0.25, "SR_6M": 0.5, "SR_1Y": 1.0, "SR_2Y": 2.0, "SR_3Y": 3.0}
+    yc_by_date: dict = {}  # "YYYY-MM-DD" -> {tenor_years: rate}
+    for tid, tyears in tenor_map.items():
+        try:
+            url = (f"https://data-api.ecb.europa.eu/service/data/YC/"
+                   f"B.U2.EUR.4F.G_N_A.SV_C_YM.{tid}"
+                   f"?startPeriod={start}&format=jsondata")
+            r = requests.get(url, timeout=30, headers=HTTP_HEADERS)
+            r.raise_for_status()
+            data = r.json()
+            dim_vals = data["structure"]["dimensions"]["observation"][0]["values"]
+            obs = list(data["dataSets"][0]["series"].values())[0]["observations"]
+            for k, v in obs.items():
+                if v[0] is not None:
+                    ds = dim_vals[int(k)]["id"]
+                    yc_by_date.setdefault(ds, {})[tyears] = float(v[0])
+        except Exception as exc:
+            log.warning("  EU hist: YC %s failed: %s", tid, exc)
+
+    if not yc_by_date:
+        log.warning("  EU hist: no yield curve data retrieved")
+        return []
+    log.info("  EU hist: yield curve data — %d dates", len(yc_by_date))
+
+    # ── Build per-date snapshots ───────────────────────────────────────────────
+    ecb_meetings = [datetime.strptime(m, "%d %b %Y") for m in meetings]
+    snaps = []
+    last_dfr = None
+    for ds in sorted(yc_by_date.keys()):
+        yc = yc_by_date[ds]
+        if len(yc) < 2:
+            continue
+        dfr = dfr_by_date.get(ds, last_dfr)
+        if dfr is None:
+            continue
+        last_dfr = dfr
+        snap_dt = datetime.strptime(ds, "%Y-%m-%d")
+        sorted_curve = sorted(yc.items())
+        base_3m = yc.get(0.25, sorted_curve[0][1])
+
+        implied_rates = []
+        for mtg in ecb_meetings:
+            t = max((mtg - snap_dt).days / 365.0, 0.001)
+            # Linear interpolate on the spot rate curve
+            rate = sorted_curve[-1][1]  # default: use longest tenor
+            if t <= sorted_curve[0][0]:
+                rate = dfr  # very near-term: use policy rate
+            else:
+                for i in range(len(sorted_curve) - 1):
+                    t0, r0 = sorted_curve[i]
+                    t1, r1 = sorted_curve[i + 1]
+                    if t0 <= t <= t1:
+                        alpha = (t - t0) / max(t1 - t0, 0.001)
+                        rate = r0 + alpha * (r1 - r0)
+                        break
+            # Anchor to DFR (same as ecb fallback)
+            anchored = round(dfr + (rate - base_3m), 4)
+            implied_rates.append(anchored)
+
+        d_fmt = snap_dt.strftime("%d %b %Y")
+        snaps.append({"date": d_fmt, "impliedRates": implied_rates})
+
+    log.info("  EU hist ECB: %d snapshots assembled", len(snaps))
+    return snaps
+
+
+def fetch_uk_history_boe(meetings: list) -> list:
+    """
+    Backfill UK BOE history using BoE instantaneous OIS forward rates
+    published via the BoE Statistics API (IUDMNZS series = OIS 1Y, IUDMNPY = 2Y, etc.)
+    Falls back to short-term rate expectations from FRED BOEBRATE + simple curve.
+    Returns [{date: 'DD Mon YYYY', impliedRates: [...]}].
+    """
+    from datetime import timedelta
+    start_dt = date.today() - timedelta(days=HISTORY_MAX_DAYS)
+
+    # BoE publishes OIS-implied spot rates as 'IUDBEDR' (Bank Rate) and
+    # instantaneous forward curves. Try the BoE Statistics bulk download.
+    # Series: IUDBEDR = Bank Rate, IUDSOIA = SONIA overnight
+    # For meeting-specific forwards, we use FRED BOEBRATE as the base
+    # and reconstruct a simple flat forward curve from the Bank Rate history.
+
+    if not FRED_API_KEY:
+        return []
+
+    # Fetch historical Bank Rate from FRED
+    boe_rate_by_date: dict = {}
+    try:
+        url = (f"https://api.stlouisfed.org/fred/series/observations"
+               f"?series_id=BOEBRATE&observation_start={start_dt.strftime('%Y-%m-%d')}"
+               f"&sort_order=asc&file_type=json&api_key={FRED_API_KEY}")
+        r = requests.get(url, timeout=20)
+        r.raise_for_status()
+        for obs in r.json().get("observations", []):
+            v = obs.get("value", ".")
+            if v != ".":
+                boe_rate_by_date[obs["date"]] = float(v)
+        log.info("  UK hist: Bank Rate history — %d dates", len(boe_rate_by_date))
+    except Exception as exc:
+        log.warning("  UK hist: FRED BOEBRATE failed: %s", exc)
+        return []
+
+    if not boe_rate_by_date:
+        return []
+
+    # Fetch BoE yield curve data (OIS-implied spot rates) via BoE Statistics API
+    # Series IUDMNZS (overnight rate), IUDMNPY (1Y OIS), IUDMNQY (2Y OIS)
+    ois_by_date: dict = {}  # "YYYY-MM-DD" -> {tenor: rate}
+    boe_series = {"IUDBEDR": 0.0, "IUDMNYA": 0.5, "IUDMNZS": 1.0, "IUDMNPY": 2.0}
+    for series_id, tenor in boe_series.items():
+        try:
+            url = (f"https://api.bankofengland.co.uk/v1/series/{series_id}/observations"
+                   f"?startDate={start_dt.strftime('%Y-%m-%d')}")
+            r = requests.get(url, timeout=20, headers=HTTP_HEADERS)
+            r.raise_for_status()
+            for obs in r.json().get("observations", []):
+                ds = obs.get("date", "")[:10]
+                val = obs.get("value")
+                if val is not None:
+                    ois_by_date.setdefault(ds, {})[tenor] = float(val)
+        except Exception as exc:
+            log.debug("  UK hist: BoE API %s failed: %s", series_id, exc)
+
+    # Build snapshots: for each date use OIS curve if available, else flat Bank Rate
+    boe_meetings = [datetime.strptime(m, "%d %b %Y") for m in meetings]
+    snaps = []
+    last_rate = None
+    for ds in sorted(set(boe_rate_by_date.keys()) | set(ois_by_date.keys())):
+        boe_rate = boe_rate_by_date.get(ds, last_rate)
+        if boe_rate is None:
+            continue
+        last_rate = boe_rate
+        snap_dt = datetime.strptime(ds, "%Y-%m-%d")
+        ois = ois_by_date.get(ds, {})
+        sorted_ois = sorted(ois.items()) if ois else []
+
+        implied_rates = []
+        for mtg in boe_meetings:
+            t = max((mtg - snap_dt).days / 365.0, 0.001)
+            if sorted_ois and len(sorted_ois) >= 2:
+                rate = sorted_ois[-1][1]
+                if t <= sorted_ois[0][0]:
+                    rate = boe_rate
+                else:
+                    for i in range(len(sorted_ois) - 1):
+                        t0, r0 = sorted_ois[i]
+                        t1, r1 = sorted_ois[i + 1]
+                        if t0 <= t <= t1:
+                            alpha = (t - t0) / max(t1 - t0, 0.001)
+                            rate = r0 + alpha * (r1 - r0)
+                            break
+            else:
+                rate = boe_rate  # no curve: flat
+            implied_rates.append(round(rate, 4))
+
+        d_fmt = snap_dt.strftime("%d %b %Y")
+        snaps.append({"date": d_fmt, "impliedRates": implied_rates})
+
+    log.info("  UK hist BOE: %d snapshots assembled", len(snaps))
+    return snaps
+
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  OUTPUT
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1345,6 +1652,47 @@ def main() -> None:
             print(f"\n-- {len(errors)} error(s) --")
             for e in errors: print(f"  * {e}")
         return
+
+    # ── History management ────────────────────────────────────────────────────
+    history = load_history()
+    today_str = date.today().strftime("%d %b %Y")
+
+    for code in ALL_MARKETS:
+        if code not in history:
+            history[code] = []
+
+        impl = markets.get(code, {}).get("impliedRates")
+        if impl:
+            # Upsert today's snapshot
+            history[code] = [s for s in history[code] if s.get("date") != today_str]
+            history[code].append({"date": today_str, "impliedRates": impl})
+
+        # Backfill from external sources if history is sparse (< 30 entries = first run)
+        if len(history[code]) < 30:
+            backfill = []
+            if code == "US":
+                log.info("  US: sparse history — running yfinance backfill...")
+                backfill = fetch_us_history_yfinance(markets["US"]["meetings"])
+            elif code == "EU":
+                log.info("  EU: sparse history — running ECB SDW backfill...")
+                backfill = fetch_eu_history_ecb(markets["EU"]["meetings"])
+            elif code == "UK":
+                log.info("  UK: sparse history — running BoE backfill...")
+                backfill = fetch_uk_history_boe(markets["UK"]["meetings"])
+            if backfill:
+                existing = {s["date"] for s in history[code]}
+                new_snaps = [s for s in backfill if s["date"] not in existing]
+                history[code] = new_snaps + history[code]
+                log.info("  %s: added %d backfill points", code, len(new_snaps))
+
+        history[code] = _trim_sort(history[code])
+        # Inject downsampled history into markets dict (for HTML)
+        markets[code]["history"] = downsample_for_html(history[code])
+        log.info("  %s history: %d snapshots for HTML (%d stored)",
+                 code, len(markets[code]["history"]), len(history[code]))
+
+    save_history(history)
+    # ─────────────────────────────────────────────────────────────────────────
 
     save_json(markets, timestamp)
     inject_html(markets, timestamp)
