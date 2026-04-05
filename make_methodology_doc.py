@@ -178,13 +178,20 @@ bullet(doc,
     'and preserves the market-implied shape for subsequent meetings.  '
     'Falls back to the ECB SDW AAA government bond yield curve if futures are unavailable.')
 bullet(doc,
-    'UK (MPC):  BOE SONIA OIS instantaneous forward curve (ZIP file, 60 monthly tenors).  '
-    'Interpolated to each meeting date.')
+    'UK (MPC):  ICE 3-Month SONIA futures (ICEEUR:SO3{M}{YYYY}) via TradingView.  '
+    'Same anchoring as ECB: spread = nearest_contract_SONIA − BOE Bank Rate.  '
+    'Falls back to the BOE SONIA OIS instantaneous forward curve (daily ZIP, 60 tenors).')
 bullet(doc,
-    'CA (BOC):  Two-point linear interpolation between BOC Valet API overnight CORRA and '
-    '2-year government benchmark bond yield.')
+    'CA (BOC):  TMX 3-Month CORRA futures (TMX:CRA{M}{YYYY}) via TradingView.  '
+    'Quarterly contracts only (Mar/Jun/Sep/Dec).  Same spread-anchoring approach.  '
+    'Falls back to BOC Valet CORRA overnight + 2Y government bond interpolation.  '
+    'Meetings in non-quarterly months are interpolated between adjacent contracts '
+    'and marked with "~" in the dashboard.')
 bullet(doc,
-    'AU (RBA):  RBA F01 BABs/NCDs at 1M/3M/6M maturities, adjusted by a fixed BBSW-OIS spread.')
+    'AU (RBA):  ASX 30-day Interbank Cash Rate futures (ASX24:IB{M}{YYYY}) via TradingView.  '
+    'Settlement = average RBA cash rate over the calendar month; month M+1 contract '
+    'used for a meeting in month M (same convention as US ZQ).  No spread adjustment.  '
+    'Falls back to RBA F01 BABs/NCDs with BBSW-OIS spread adjustment.')
 bullet(doc,
     'Implied Change (bps):  Δ = Implied Rate − Base Rate, expressed in basis points.  '
     'For the US, the base rate is the Effective Fed Funds Rate (EFFR, FRED series DFF) — '
@@ -283,7 +290,10 @@ bullet(doc, 'For ECB meetings within the same calendar month as the nearest EURI
 bullet(doc, 'US ±bps figures are relative to the EFFR (daily fixing), which trades within the '
     'Fed\'s target range and may differ slightly from the target midpoint.')
 bullet(doc, 'TradingView scanner API is an unofficial endpoint; availability and field names '
-    'may change without notice.  Yahoo Finance (US) and ECB SDW YC (EU) are maintained as fallbacks.')
+    'may change without notice.  Yahoo Finance (US), BOE OIS ZIP (UK), BOC Valet (CA), and '
+    'RBA F01 BABs (AU) are maintained as fallbacks for each market.')
+bullet(doc, 'CA implied rates between quarterly CORRA contract months are linearly interpolated; '
+    'these meetings are marked with "~" in the Implied Rate column.')
 bullet(doc, 'CA implied rates are interpolated from two points only (overnight CORRA + 2Y bond); the curve shape is linear.')
 bullet(doc, 'AU implied rates use BABs/NCDs with a fixed BBSW-OIS spread adjustment; the spread varies over time.')
 bullet(doc, 'Historical repricing series are simulated; they are illustrative and not based on live OIS time-series data.')

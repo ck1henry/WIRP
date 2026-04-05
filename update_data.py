@@ -80,11 +80,11 @@ DRIFT = {
 # live=True  → meetings + rate scraped from official website each run
 # live=False → hardcoded fallback; update FALLBACK manually after decisions
 META = {
-    "US": {"name": "Federal Reserve",           "abbr": "FOMC",   "region": "Americas", "live": True, "source": "CME FF futures (TradingView / Yahoo Finance)"},
+    "US": {"name": "Federal Reserve",           "abbr": "FOMC",   "region": "Americas", "live": True, "source": "CME ZQ futures (TradingView / Yahoo Finance)"},
     "EU": {"name": "European Central Bank",     "abbr": "ECB GC", "region": "Europe",   "live": True, "source": "Eurex EURIBOR 3M futures (TradingView)"},
-    "UK": {"name": "Bank of England",           "abbr": "MPC",    "region": "Europe",   "live": True, "source": "bankofengland.co.uk"},
-    "CA": {"name": "Bank of Canada",            "abbr": "BOC",    "region": "Americas", "live": True, "source": "bankofcanada.ca"},
-    "AU": {"name": "Reserve Bank of Australia", "abbr": "RBA",    "region": "Asia-Pac", "live": True, "source": "rba.gov.au"},
+    "UK": {"name": "Bank of England",           "abbr": "MPC",    "region": "Europe",   "live": True, "source": "ICE 3M SONIA futures (TradingView)"},
+    "CA": {"name": "Bank of Canada",            "abbr": "BOC",    "region": "Americas", "live": True, "source": "TMX 3M CORRA futures (TradingView)"},
+    "AU": {"name": "Reserve Bank of Australia", "abbr": "RBA",    "region": "Asia-Pac", "live": True, "source": "ASX 30-day IB cash rate futures (TradingView)"},
 }
 
 # ── Hardcoded fallback data ───────────────────────────────────────────────────
@@ -674,7 +674,9 @@ def fetch_us_implied_rates(meetings: list[str]) -> "list[float] | None":
                  mtg_str, yf_tick, price, implied)
         results.append(implied)
 
-    return results if len(results) == len(meetings) else None
+    if len(results) != len(meetings):
+        return None
+    return [(r, False) for r in results]  # ZQ: every meeting has a direct contract
 
 
 def _interpolate_curve(
@@ -768,7 +770,8 @@ def fetch_ecb_implied_rates(meetings: list[str]) -> "list[float] | None":
 
     if not tv_prices or len(tv_prices) < 2:
         log.warning("  EU implied: TradingView returned <2 contracts — falling back to ECB YC")
-        return _ecb_yc_fallback(meetings)
+        fb = _ecb_yc_fallback(meetings)
+        return fb  # already returns tuples
 
     # ── Compute implied EURIBOR rates for each contract we got ───────────────
     euribor_curve: list[tuple[float, float]] = []  # (t_yr, implied_euribor)
@@ -793,7 +796,19 @@ def fetch_ecb_implied_rates(meetings: list[str]) -> "list[float] | None":
     # ── Build DFR-anchored curve ──────────────────────────────────────────────
     adjusted = [(t, r - spread) for t, r in euribor_curve]
 
-    return _interpolate_curve(adjusted, meetings, "ECB EURIBOR")
+    rates = _interpolate_curve(adjusted, meetings, "ECB EURIBOR")
+    if rates is None:
+        return None
+    # Mark meeting as direct if its month had a contract in tv_prices
+    available = set()
+    for sym in tv_prices:
+        mc = sym[len("EUREX:FEU3")]  # single character
+        yr = int(sym[len("EUREX:FEU3") + 1:])
+        available.add((yr, next(m for m, c in _EURIBOR_MONTH.items() if c == mc)))
+    return [(r, (datetime.strptime(mtg, "%d %b %Y").month,
+                 datetime.strptime(mtg, "%d %b %Y").year) not in
+             {(m, y) for y, m in available})
+            for r, mtg in zip(rates, meetings)]
 
 
 def _ecb_yc_fallback(meetings: list[str]) -> "list[float] | None":
@@ -832,20 +847,64 @@ def _ecb_yc_fallback(meetings: list[str]) -> "list[float] | None":
     ecb_rate = scrape_ecb_rate()
     base_3m  = raw.get(0.25, min(raw.values()))
     adjusted = sorted([(t, ecb_rate + (r - base_3m)) for t, r in raw.items()])
-    return _interpolate_curve(adjusted, meetings, "ECB YC")
+    rates = _interpolate_curve(adjusted, meetings, "ECB YC")
+    if rates is None:
+        return None
+    return [(r, True) for r in rates]  # YC fallback: all interpolated from smooth curve
 
 
-# ── UK: Bank of England — SONIA OIS instantaneous forward curve ──────────────
+# ── UK: Bank of England — 3-Month SONIA futures (ICE) ────────────────────────
 
-def fetch_uk_implied_rates(meetings: list[str]) -> "list[float] | None":
+def fetch_uk_implied_rates(meetings: list[str]) -> "list | None":
     """
-    UK MPC implied rates from the Bank of England's SONIA OIS instantaneous
-    forward rate curve, published daily as part of the BOE yield curve dataset.
-
-    Source:  https://www.bankofengland.co.uk/statistics/yield-curves
-             'OIS daily data current month.xlsx' (updated each business day)
-             Sheet '1. fwds, short end' — maturities 1 M … 60 M
+    Primary: ICE 3-Month SONIA futures (ICEEUR:SO3{M}{YYYY}) via TradingView.
+    Same anchoring approach as ECB EURIBOR: spread = nearest_contract - BOE rate.
+    Fallback: BOE SONIA OIS instantaneous forward curve (ZIP, daily).
     """
+    today   = date.today()
+    boe_rate = scrape_boe_rate()
+
+    anchor_sym  = f"ICEEUR:SO3{_FF_MONTH[today.month]}{today.year}"
+    meeting_syms = [(mtg, f"ICEEUR:SO3{_FF_MONTH[datetime.strptime(mtg,'%d %b %Y').month]}{datetime.strptime(mtg,'%d %b %Y').year}")
+                    for mtg in meetings]
+
+    all_syms = list(dict.fromkeys([anchor_sym] + [s for _, s in meeting_syms]))
+    log.info("  UK implied: SONIA futures batch — %s", all_syms)
+    tv_prices = _tradingview_ff_prices(all_syms)
+
+    if tv_prices and len(tv_prices) >= 2:
+        sonia_curve = []
+        for sym, price in tv_prices.items():
+            code = sym[len("ICEEUR:SO3"):]
+            mc, yr = code[0], int(code[1:])
+            month = next(m for m, c in _FF_MONTH.items() if c == mc)
+            t = max((date(yr, month, 15) - today).days / 365.0, 0.001)
+            sonia_curve.append((t, round(100.0 - price, 4)))
+        sonia_curve.sort()
+
+        spread = sonia_curve[0][1] - boe_rate
+        log.info("  UK implied: SONIA-Bank Rate spread (calibrated) = %.2fbps", spread * 100)
+        adjusted = [(t, r - spread) for t, r in sonia_curve]
+
+        available = set()
+        for sym in tv_prices:
+            code = sym[len("ICEEUR:SO3"):]
+            mc, yr = code[0], int(code[1:])
+            available.add((yr, next(m for m, c in _FF_MONTH.items() if c == mc)))
+
+        rates = _interpolate_curve(adjusted, meetings, "UK SONIA")
+        if rates is not None:
+            return [(r, (datetime.strptime(mtg, "%d %b %Y").year,
+                         datetime.strptime(mtg, "%d %b %Y").month) not in available)
+                    for r, mtg in zip(rates, meetings)]
+
+    log.warning("  UK implied: TradingView SONIA failed — falling back to BOE OIS")
+    fb = _boe_ois_fallback(meetings)
+    return [(r, True) for r in fb] if fb else None
+
+
+def _boe_ois_fallback(meetings: list[str]) -> "list[float] | None":
+    """BOE SONIA OIS instantaneous forward curve fallback (returns plain floats)."""
     if not _OPENPYXL:
         log.warning("  UK implied: openpyxl not installed — using DRIFT")
         return None
@@ -911,20 +970,71 @@ def fetch_uk_implied_rates(meetings: list[str]) -> "list[float] | None":
     return None
 
 
-# ── CA: Bank of Canada — CORRA overnight + 2Y bond yield interpolation ────────
+# ── CA: Bank of Canada — 3-Month CORRA futures (TMX, quarterly) ──────────────
 
-def fetch_ca_implied_rates(meetings: list[str]) -> "list[float] | None":
+# CORRA futures only have quarterly contracts (H=Mar, M=Jun, U=Sep, Z=Dec)
+_CORRA_QUARTERLY = {3, 6, 9, 12}
+
+def fetch_ca_implied_rates(meetings: list[str]) -> "list | None":
     """
-    CA implied rates bootstrapped from two BOC Valet API points:
-      - CORRA overnight rate (V122514) as the 0-year anchor
-      - 2-year benchmark government bond yield (BD.CDN.2YR.DQ.YLD)
-
-    Linear interpolation between the two gives a simple implied rate path.
-    This is a crude approximation of the CORRA OIS term structure; pure CORRA
-    OIS rates are not available from any free public source.
-
-    Source:  Bank of Canada Valet API (https://www.bankofcanada.ca/valet/)
+    Primary: TMX 3-Month CORRA futures (TMX:CRA{M}{YYYY}) via TradingView.
+    Quarterly contracts (Mar/Jun/Sep/Dec) only — non-quarterly meetings are
+    interpolated and flagged with is_interp=True.
+    Same anchoring approach as ECB EURIBOR.
+    Fallback: BOC Valet CORRA overnight + 2Y bond interpolation.
     """
+    today    = date.today()
+    boc_rate = scrape_boc_rate()
+
+    # Request the nearest 6 quarterly contracts spanning the meeting window
+    quarterly_codes = {3: 'H', 6: 'M', 9: 'U', 12: 'Z'}
+    syms = []
+    for yr in [today.year, today.year + 1]:
+        for m, mc in quarterly_codes.items():
+            sym = f"TMX:CRA{mc}{yr}"
+            if date(yr, m, 15) >= today - __import__('datetime').timedelta(days=30):
+                syms.append(sym)
+    syms = syms[:8]  # up to 2 years out
+
+    log.info("  CA implied: CORRA futures batch — %s", syms)
+    tv_prices = _tradingview_ff_prices(syms)
+
+    if tv_prices and len(tv_prices) >= 2:
+        corra_curve = []
+        for sym, price in tv_prices.items():
+            code = sym[len("TMX:CRA"):]
+            mc, yr = code[0], int(code[1:])
+            month = next(m for m, c in quarterly_codes.items() if c == mc)
+            t = max((date(yr, month, 15) - today).days / 365.0, 0.001)
+            corra_curve.append((t, round(100.0 - price, 4)))
+        corra_curve.sort()
+
+        spread = corra_curve[0][1] - boc_rate
+        log.info("  CA implied: CORRA-BOC spread (calibrated) = %.2fbps", spread * 100)
+        adjusted = [(t, r - spread) for t, r in corra_curve]
+
+        available_qtr = set()
+        for sym in tv_prices:
+            code = sym[len("TMX:CRA"):]
+            mc, yr = code[0], int(code[1:])
+            available_qtr.add((yr, next(m for m, c in quarterly_codes.items() if c == mc)))
+
+        rates = _interpolate_curve(adjusted, meetings, "CA CORRA")
+        if rates is not None:
+            result = []
+            for r, mtg in zip(rates, meetings):
+                mtg_d = datetime.strptime(mtg, "%d %b %Y")
+                is_interp = (mtg_d.year, mtg_d.month) not in available_qtr
+                result.append((r, is_interp))
+            return result
+
+    log.warning("  CA implied: TradingView CORRA failed — falling back to BOC CORRA+2Y")
+    fb = _boc_corra_2y_fallback(meetings)
+    return [(r, True) for r in fb] if fb else None
+
+
+def _boc_corra_2y_fallback(meetings: list[str]) -> "list[float] | None":
+    """BOC Valet CORRA overnight + 2Y bond fallback (returns plain floats)."""
     today = date.today()
     valet = "https://www.bankofcanada.ca/valet/observations/{}/json?recent=5"
 
@@ -960,24 +1070,72 @@ def fetch_ca_implied_rates(meetings: list[str]) -> "list[float] | None":
     return _interpolate_curve(sorted_curve, meetings, "CA BOC")
 
 
-# ── AU: Reserve Bank of Australia — BABs/NCDs (BBSW proxy) ──────────────────
+# ── AU: Reserve Bank of Australia — ASX 30-day IB cash rate futures ──────────
 
-_BBSW_OIS_SPREAD = {1/12: 0.12, 3/12: 0.22, 6/12: 0.30}  # approx bps adj (%)
+_BBSW_OIS_SPREAD = {1/12: 0.12, 3/12: 0.22, 6/12: 0.30}  # kept for BABs fallback
 
-def fetch_au_implied_rates(meetings: list[str]) -> "list[float] | None":
+def fetch_au_implied_rates(meetings: list[str]) -> "list | None":
     """
-    AU implied rates from RBA F1 money market table (BABs/NCDs columns).
-
-    The RBA publishes end-of-day 1M, 3M, and 6M bank accepted bill (BABs/
-    NCDs) rates in their F01 interest rates Excel file.  These are equivalent
-    to BBSW (Bank Bill Swap Rate).  BBSW includes a credit/liquidity premium
-    over the OIS rate; approximate spreads of 12/22/30 bps are subtracted to
-    derive OIS-equivalent implied rates.
-
-    Source:  https://www.rba.gov.au/statistics/tables/xls/f01d.xlsx
-    Note:    Pure ASX 30-day cash rate futures OIS data is not publicly
-             available for free.
+    Primary: ASX 30-day Interbank Cash Rate futures (ASX24:IB{M}{YYYY}).
+    Settlement = average RBA cash rate over the calendar month.
+    Convention: use month M+1 contract for a meeting in month M (same as ZQ).
+    No spread adjustment needed — these settle directly to the RBA cash rate.
+    Fallback: RBA F01 BABs/NCDs with BBSW-OIS spread adjustment.
     """
+    today    = date.today()
+
+    contract_specs = []
+    for mtg_str in meetings:
+        try:
+            mtg = datetime.strptime(mtg_str, "%d %b %Y").date()
+        except ValueError:
+            return None
+        post_month = mtg.month + 1
+        post_year  = mtg.year
+        if post_month > 12:
+            post_month = 1
+            post_year += 1
+        tv_sym = f"ASX24:IB{_FF_MONTH[post_month]}{post_year}"
+        contract_specs.append((mtg_str, tv_sym))
+
+    all_syms = list(dict.fromkeys(s for _, s in contract_specs))
+    log.info("  AU implied: IB cash rate futures batch — %s", all_syms)
+    tv_prices = _tradingview_ff_prices(all_syms)
+
+    if tv_prices and len(tv_prices) >= 2:
+        results = []
+        for mtg_str, tv_sym in contract_specs:
+            if tv_sym in tv_prices:
+                implied = round(100.0 - tv_prices[tv_sym], 4)
+                log.info("  AU IB implied[%s]: %s=%.4f%% -> %.4f%%",
+                         mtg_str, tv_sym, tv_prices[tv_sym], implied)
+                results.append((implied, False))
+            else:
+                # Symbol missing — interpolate from adjacent contracts
+                log.warning("  AU implied[%s]: %s missing — interpolating", mtg_str, tv_sym)
+                # Build curve from what we have and interpolate
+                curve = []
+                for sym, price in tv_prices.items():
+                    code = sym[len("ASX24:IB"):]
+                    mc, yr = code[0], int(code[1:])
+                    month = next(m for m, c in _FF_MONTH.items() if c == mc)
+                    t = max((date(yr, month, 15) - today).days / 365.0, 0.001)
+                    curve.append((t, round(100.0 - price, 4)))
+                curve.sort()
+                mtg_d = datetime.strptime(mtg_str, "%d %b %Y").date()
+                t_mtg = max((mtg_d - today).days / 365.0, 0.001)
+                interped = _interpolate_curve(curve, [mtg_str], "AU IB interp")
+                results.append((interped[0] if interped else None, True))
+        if all(r is not None for r, _ in results):
+            return results
+
+    log.warning("  AU implied: TradingView IB failed — falling back to RBA BABs")
+    fb = _rba_babs_fallback(meetings)
+    return [(r, True) for r in fb] if fb else None
+
+
+def _rba_babs_fallback(meetings: list[str]) -> "list[float] | None":
+    """RBA F01 BABs/NCDs BBSW-OIS-adjusted fallback (returns plain floats)."""
     if not _OPENPYXL:
         log.warning("  AU implied: openpyxl not installed — using DRIFT")
         return None
@@ -1106,16 +1264,18 @@ def fetch_all_data() -> tuple[dict, list[str]]:
 
         # ── static metadata + drift ───────────────────────────────────────────
         result[code].update(META[code])
-        result[code]["drift"] = DRIFT[code]
 
         # ── implied rates (OIS / futures) ─────────────────────────────────────
         if code in IMPLIED_RATE_FETCHERS:
             try:
                 implied = IMPLIED_RATE_FETCHERS[code](result[code]["meetings"])
                 if implied:
-                    result[code]["impliedRates"] = implied
+                    rates  = [r for r, _ in implied]
+                    interp = [i for _, i in implied]
+                    result[code]["impliedRates"]       = rates
+                    result[code]["impliedRatesInterp"] = interp
                     log.info("  %s impliedRates: %s", code,
-                             [f"{r:.3f}" for r in implied])
+                             [f"{r:.3f}" for r in rates])
                 else:
                     log.info("  %s impliedRates: fetcher returned None — "
                              "dashboard will use DRIFT model", code)

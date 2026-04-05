@@ -285,27 +285,26 @@ function tickCountdown() {
 
 // ── Data ──
 function generateData(code) {
-    const m = markets[code], n = m.meetings.length;
+    const m = markets[code];
     return m.meetings.map((meeting, i) => {
-        let implied;
-        if (m.impliedRates && i < m.impliedRates.length && m.impliedRates[i] != null) {
-            // Real market data (OIS / futures)
-            implied = m.impliedRates[i];
-        } else {
-            // Drift model — deterministic linear path, no random noise
-            const drift = (m.drift / Math.max(n - 1, 1)) * i;
-            implied = m.rate + drift;
+        const hasRate = m.impliedRates && i < m.impliedRates.length && m.impliedRates[i] != null;
+        if (!hasRate) {
+            // No real market data available — return null row (not rendered)
+            return { meeting, impliedRate: null, impliedChangeBps: null,
+                     hikeProb: null, cutProb: null, isInterp: false, noData: true };
         }
-        const change = implied - m.rate;
-        const bps    = change * 100;
+        const implied = m.impliedRates[i];
+        const change  = implied - m.rate;
+        const bps     = change * 100;
         return {
             meeting,
             impliedRate:      parseFloat(implied.toFixed(3)),
             impliedChangeBps: parseFloat(bps.toFixed(1)),
             hikeProb:         parseFloat((change > 0 ? Math.min((change / 0.25) * 100, 100) : 0).toFixed(1)),
             cutProb:          parseFloat((change < 0 ? Math.min((Math.abs(change) / 0.25) * 100, 100) : 0).toFixed(1)),
+            isInterp:         !!(m.impliedRatesInterp && m.impliedRatesInterp[i]),
         };
-    });
+    }).filter(r => !r.noData);
 }
 
 // ── Summary strip ──
@@ -366,7 +365,7 @@ function renderChart(code) {
 
     const sw = document.getElementById('chartLegendLine');
     if (sw) sw.style.background = lc;
-    const _src = m.impliedRates ? 'Futures / OIS' : 'Model (drift)';
+    const _src = 'Futures / OIS';
     document.getElementById('chartTitle').textContent = `${m.name}  ·  Implied Rate Path  ·  ${_src}`;
 
     let grid = '';
@@ -415,7 +414,7 @@ function renderTable(code, flash = false) {
                 <span style="font-size:.82rem;color:var(--text);">${row.meeting}</span>
                 ${i === 0 ? '<span class="next-tag">NEXT</span>' : ''}
             </div>
-            <div style="text-align:right;"><span style="font-size:.85rem;font-weight:600;color:var(--text);">${row.impliedRate.toFixed(3)}</span><span style="font-size:.61rem;color:var(--text-mid);">%</span></div>
+            <div style="text-align:right;">${row.isInterp ? `<span style="font-size:.65rem;color:var(--text-dim);margin-right:1px;" title="Interpolated — no direct futures contract for this meeting">~</span>` : ''}<span style="font-size:.85rem;font-weight:600;color:var(--text);">${row.impliedRate.toFixed(3)}</span><span style="font-size:.61rem;color:var(--text-mid);">%</span></div>
             <div style="text-align:right;"><span style="font-size:.85rem;font-weight:700;color:${chgColor};">${row.impliedChangeBps >= 0 ? '+' : ''}${row.impliedChangeBps.toFixed(1)}</span><span style="font-size:.58rem;color:var(--text-dim);"> bps</span></div>
         </div>`;
     });
